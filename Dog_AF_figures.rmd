@@ -1,0 +1,838 @@
+---
+title: "Dog_AF_figures"
+author: "Francis Leblanc"
+date: "20/07/2020"
+output:   
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: true
+    code_folding: hide 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, warning=FALSE, results = 'hide', message=FALSE}
+extrafont::loadfonts(device="win")
+pacman::p_load(patchwork,
+               ComplexUpset,
+               hrbrthemes,
+               cowplot,
+               tidyverse,
+               rio,
+               ggplot2,
+               limma,
+               factoextra,
+               ggrepel,
+               EnhancedVolcano,
+               sva,
+               pcaExplorer,
+               ggpubr,
+               reshape2,
+               psych,
+               PerformanceAnalytics)
+theme_set(theme_minimal())
+custom.t <-theme_minimal(base_size = 9) +
+  theme(
+    panel.background = element_rect(fill = "transparent",colour = NA),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank(),
+    plot.background = element_rect(fill = "transparent",colour = NA),
+    legend.background  = element_rect(fill = "transparent",colour = NA),
+    legend.key = element_rect(fill = "transparent",colour = NA))
+
+custom.classic <-theme_classic(base_size = 9) +
+  theme(
+    panel.background = element_rect(fill = "transparent",colour = NA),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank(),
+    plot.background = element_rect(fill = "transparent",colour = NA),
+    legend.background  = element_rect(fill = "transparent",colour = NA),
+    legend.key = element_rect(fill = "transparent",colour = NA))
+
+custom.f <- scale_fill_manual(values = c("darkblue", "#ed0909", "#E69F00"))
+
+# For clarity labels ATP is changed to AF and AVB to AF+AVB
+expr_cols <- c(18:35)
+all_res <- import("mRNA/data/final/all.raw_expression.RDS") #Log transformed results from 3 assays
+sample_alt_labels <- colnames(all_res)[expr_cols]
+sample_alt_labels <- gsub("ATP","AF",sample_alt_labels)
+sample_alt_labels <- gsub("AVB","AF+AVB",sample_alt_labels)
+condition_alt_labels <- c("CTL", "AF", "AF+AVB")
+```
+
+
+# Figure 1  
+
+## 1.a-Barplot of cell fractions
+
+```{r}
+fraction.c <- import("mRNA/data/final/CIBERSORTx.xlsx") # fractions predicted from Cybersortx
+fraction.c$condition <- factor(c(rep("AVB",6),rep("ATP",6),rep("CTL",6)), levels = c("CTL", "ATP", "AVB"))
+fraction.c <- fraction.c %>% map_df(rev)
+
+frac.t <- t(fraction.c[,2:9])
+
+colnames(frac.t) <- fraction.c$Mixture
+m <- melt(frac.t)
+colnames(m) <- c("Cell type", "Sample", "Cell type fraction")
+m$Sample <- gsub("ATP","AF",m$Sample)
+m$Sample <- gsub("AVB","AF+AVB",m$Sample)
+
+
+bar_fractions <- ggplot(data=m, aes(x=Sample, y=`Cell type fraction`, fill=`Cell type`)) +
+  geom_bar(colour = NA, stat="identity")+
+  scale_fill_brewer(palette="Paired")  +
+  custom.t + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1.1))
+
+
+bar_fractions
+```
+
+
+## 1.b-Fraction of FB by condition (KW & Wilcoxon test)
+
+```{r}
+my_comparisons <- list( c("CTL", "ATP"), c("CTL", "AVB"), c("ATP", "AVB") )
+
+box_fractions <- ggboxplot(fraction.c, x = "condition", y = "fibroblast", shape = 21, 
+          palette = c("#E69F00", "darkblue", "#ed0909" ), legend = "right",
+          color = "condition", add = "jitter", alpha = 0.1, fill = "condition",  ylab = "Fibroblast fraction",
+          font.label = list(size = 1))+ 
+  scale_x_discrete(labels= condition_alt_labels) +
+  stat_compare_means(comparisons = my_comparisons,label.y = c(0.4, 0.46, 0.42))+
+  ylim(0,0.5)+
+  custom.classic
+
+box_fractions
+```
+
+## 1.c-PCA after correction for fibroblast fraction
+
+```{r}
+all_res_cor <- import("mRNA/data/final/all.FB.corrected_expressions.RDS") 
+
+df <- all_res_cor[all_res_cor$Dataset == "mRNA",expr_cols] #Log transformed expression cols
+
+rv <- genefilter::rowVars(df)
+
+# select the ntop genes by variance
+select <- order(rv, decreasing=TRUE)[1:1000]
+
+pca <- prcomp(t(df[select,])) # compute PCs
+get_eig(pca) # cumulative explained variance by PC
+fviz_eig(pca) # plot explained variance by PC
+
+#get coordinates by samples PC1&2
+ind <- get_pca_ind(pca) 
+df_ind <- data.frame(ind$coord[,1:2]) 
+
+# Add sample names
+df_ind$sample <- sample_alt_labels
+df_ind$condition <- substr(colnames(all_res_cor)[expr_cols],1,3)
+
+# Plot PC1&2 samples as labels and treatment as colors
+PCA_cor <- ggplot(df_ind, aes(Dim.1, Dim.2, fill=condition, label=sample))+
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) +
+  geom_point(colour = "black",shape=21,size=3) +
+  geom_text_repel(size = 2)+
+  ylim(-16,20)
+  ggtitle("") 
+
+PCA_cor <- PCA_cor + custom.f+ custom.t + xlab("PC1")+ ylab("PC2") + 
+  theme(legend.position = "none",
+        plot.margin = margin(18, 3, 3, 3,unit = "pt"))
+```
+
+## Patchwork fig1
+
+
+```{r}
+p <- ggdraw() +
+  draw_plot(bar_fractions, x = 0, y = .5, width = .66, height = .5) +
+  draw_plot(box_fractions, x = .66, y = .5, width = .33, height = .5) +
+  draw_plot(PCA_cor, x = 0.2, y = 0, width = 0.6, height = 0.5) +
+  draw_plot_label(label = c("A", "B", "C"), size = 15,
+                  x = c(0, 0.66, 0.2), y = c(1, 1, 0.5))
+
+p
+png("manuscript/Figure1.png", units="in", bg = "transparent", width=9, height=6, res=600)
+
+p
+
+dev.off()
+```
+# Figure 2
+
+Correlation RNA-Protein
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+  #Get mean values for Protein and corresponding RNA
+proteins <- all_res %>% filter(Dataset == "proteins")
+mRNA <- all_res %>% filter(Dataset == "mRNA")
+
+mean_proteins <-  proteins %>% dplyr::select(AVB1:CTL2) %>% apply(1,mean)
+mean_RNA <- apply(mRNA[match(proteins$Gene, mRNA$Gene),expr_cols],1,mean)
+
+  #Get mean expression of all RNA
+mean_RNA.all <- data.frame(mean.exp = apply(mRNA[,expr_cols],1,mean), x = rep(min(mean_proteins),nrow(mRNA)))
+mean_RNA.all$CTL <- apply(mRNA[,grep("CTL",colnames(mRNA))],1,mean)
+mean_RNA.all$ATP <- apply(mRNA[,grep("ATP",colnames(mRNA))],1,mean)
+mean_RNA.all$AVB <- apply(mRNA[,grep("AVB",colnames(mRNA))],1,mean)
+mean_RNA.all$Gene <- mRNA$Gene
+
+  #Col with notation for DE RNAs
+mean_RNA.all$set <- "all_RNA"
+matching_genes <- match(proteins$Gene, mean_RNA.all$Gene)
+matching_genes <- matching_genes[!is.na(matching_genes)]
+mean_RNA.all$set[matching_genes] <- "Common"
+df <- data.frame(mean_proteins=mean_proteins,mean_RNA=mean_RNA,gene=proteins$Gene)
+
+
+df$prot.sign <- ifelse(proteins$LRT_padj[match(df$gene, proteins$Gene)] < 0.05, "yes", "no")
+df <- df[!is.na(df$mean_RNA),]
+df$mRNA.LRT.significant <- ifelse(mRNA$LRT_padj[match(df$gene,mRNA$Gene)] < 0.01, "yes", "no")
+
+df$combined.sign <- ifelse(df$mRNA.LRT.significant == "yes", "RNA.sign", "N.S.")
+df$combined.sign[which(df$prot.sign == "yes" & df$mRNA.LRT.significant == "yes")] <- "Both.sign"
+df$combined.sign <- factor(df$combined.sign, levels = c("N.S.","RNA.sign","Both.sign"))
+df$label <- NA
+s <- which(df$mRNA.LRT.significant == "yes" & df$mean_proteins > 26)
+df$label[s] <- as.character(df$gene[s])
+
+
+
+  #Compute pearson R
+annotation <- cor.test(df$mean_proteins, df$mean_RNA, method = "pearson", conf.level = 0.95)
+
+  #Dotplot for RNA vs Protein
+p1 <- ggplot(df,aes(x=mean_proteins, y=mean_RNA, label = label)) + 
+  scale_fill_manual(values = c("black","orange", "darkred")) +
+  geom_point(aes(colour = combined.sign, fill= combined.sign, size = combined.sign),shape =21, alpha = 0.7) +
+  geom_label_repel(size = 3, alpha = 0.7)+
+  ylim(-1,21) +
+  theme_classic() +
+  scale_colour_manual(values =  c("white","black","black")) +
+  scale_size_manual(values = c(1,3,4)) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank())+
+  annotate("text", x = 20, y = 20, label = paste0("r=",round(annotation$estimate[[1]],2),
+                                                  " p=", formatC(annotation$p.value, format = "e", digits = 2))) +
+  geom_smooth(colour = "black", method="lm")+
+  ylab("Mean RNA log2 expression") + xlab("Mean Protein log2 expression")
+
+
+  #margin histogram showing gene common to protein and RNA vs overall RNA distribution
+p2 <- ggplot(mean_RNA.all, aes(y=mean.exp, fill=set)) + 
+  geom_histogram(alpha=0.7, bins=100)+ 
+  scale_fill_manual(values = c("darkgray","black"))+
+  theme_classic()+
+  ylim(-1,21) +
+  ylab(NULL) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank())
+
+png("manuscript/Figure2.png", units="in", bg = "transparent", width=9, height=6, res=600)
+
+patch <- p1 + p2  +
+  plot_layout(widths = c(3.5,1)) &
+        theme(plot.margin = unit(c(0,0,0,0), "cm"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.background = element_rect(fill = "transparent",colour = NA),
+              plot.background = element_rect(fill = "transparent",colour = NA),
+              plot.tag = element_text(size = 12))
+patch + plot_annotation(tag_levels = 'A')
+
+dev.off()
+
+
+```
+
+
+
+# Figure 3
+
+## 3.a-Volcano plots 3 contrasts (no L2FC)
+
+```{r}
+mRNA <- all_res %>% filter(Dataset == "mRNA")
+
+mRNA$AVBvsCTLL2FC <- -1*(mRNA$CTLvsAVBL2FC) # setting CTL as reference level of expression
+mRNA$ATPvsCTLL2FC <- -1*(mRNA$CTLvsATPL2FC) # setting CTL as reference level of expression
+
+mRNA$Gene[which(mRNA$GENEID == "ENSCAFG00000049959")] <- "ENSCAFG00000049959(MEG3)"
+
+v.theme <- theme(
+  panel.background = element_rect(fill = "transparent",colour = NA),
+  panel.grid.minor = element_blank(),
+  panel.grid.major = element_blank(),
+  plot.background = element_rect(fill = "transparent",colour = NA),
+  legend.background  = element_rect(fill = "transparent",colour = NA),
+  legend.key = element_rect(fill = "transparent",colour = NA))
+
+max <- -log10(10e-28)
+v.AVB.CTL <- EnhancedVolcano(mRNA,
+    lab = mRNA$Gene,
+    transcriptPointSize = 1.5,
+    transcriptLabSize = 2.5,
+    pLabellingCutoff = 1e-10,
+    legendVisible = F,
+    x = 'AVBvsCTLL2FC',
+    y = 'CTLvsAVBpadj',
+    pCutoff = 0.01,
+    col=c('black', 'black', 'black', 'darkred'),
+    cutoffLineType="blank",
+    cutoffLineCol = 'black',
+    cutoffLineWidth = 0.8,
+    hline = 0.01,
+    hlineCol = 'grey0',
+    hlineType = 'longdash',
+    hlineWidth = 0.8,
+    FCcutoff = 0,
+    title = NULL,
+    caption = NULL,
+    subtitle = NULL,
+    legendPosition = NULL,
+    ylab = expression(paste(-Log[10],italic("FDR"))),
+    # xlab = NULL,
+    drawConnectors = T,
+    axisLabSize = 9, 
+    ylim = c(0, max),
+    xlim = c(-5, 4))+
+  geom_label(aes(2.5, max-0.5),label=expression("" %up% "AF+AVB"))+
+  geom_label(aes(-2.5, max-0.5),label=expression("" %up% "CTL"))
+
+v.AVB.CTL <- v.AVB.CTL + v.theme
+
+#######################
+
+v.ATP.CTL <-EnhancedVolcano(mRNA,
+    lab = mRNA$Gene,
+    transcriptPointSize = 1.5,
+    transcriptLabSize = 2.5,
+    pLabellingCutoff = 1e-10,
+    legendVisible = F,
+    x = 'ATPvsCTLL2FC',
+    y = 'CTLvsATPpadj',
+    pCutoff = 0.01,
+    col=c('black', 'black', 'black', 'darkred'),
+    cutoffLineType="blank",
+    cutoffLineCol = 'black',
+    cutoffLineWidth = 0.8,
+    hline = 0.01,
+    hlineCol = 'grey0',
+    hlineType = 'longdash',
+    hlineWidth = 0.8,
+    FCcutoff = 0,
+    title = NULL,
+    caption = NULL,
+    subtitle = NULL,
+    legendPosition = NULL,
+    # xlab = NULL,
+    ylab = expression(paste(-Log[10],italic("FDR"))),
+    drawConnectors = T,
+    axisLabSize = 9, 
+    ylim = c(0, max),
+    xlim = c(-5, 4))+
+  geom_label(aes(2.5, max-0.5),label=expression("" %up% "AF") )+
+  geom_label(aes(-2.5, max-0.5),label=expression("" %up% "CTL"))
+
+
+v.ATP.CTL <- v.ATP.CTL + v.theme
+
+#######################
+
+mRNA$Gene[which(mRNA$GENEID == "ENSCAFG00000049959")] <- ""
+
+v.ATP.AVB <- EnhancedVolcano(mRNA,
+    lab = mRNA$Gene,
+    transcriptPointSize = 1.5,
+    transcriptLabSize = 2.5,
+    pLabellingCutoff = 1e-10,
+    legendVisible = F,
+    x = 'AVBvsATPL2FC',
+    y = 'AVBvsATPpadj',
+    pCutoff = 0.01,
+    col=c('black', 'black', 'black', 'darkred'),
+    cutoffLineType="blank",
+    cutoffLineCol = 'black',
+    cutoffLineWidth = 0.8,
+    hline = 0.01,
+    hlineCol = 'grey0',
+    hlineType = 'longdash',
+    hlineWidth = 0.8,
+    FCcutoff = 0,
+    title = NULL,
+    caption = NULL,
+    subtitle = NULL,
+    legendPosition = NULL,
+    drawConnectors = T,
+    axisLabSize = 9,
+    ylab = expression(paste(-Log[10],italic("FDR"))),
+    ylim = c(0, max),
+    xlim = c(-5, 4))+
+  geom_label(aes(2.5, max-0.5),label=expression("" %up% "AF+AVB") )+
+  geom_label(aes(-2.5, max-0.5),label=expression("" %up% "AF"))
+
+v.ATP.AVB <- v.ATP.AVB + v.theme
+```
+
+## 3.b-Pathway enriched 3 contrasts
+
+```{r}
+GO_BP <- import("mRNA/data/final/mRNA_DogAF.GO_BP.xlsx")
+GO_BP$contrast <- gsub("ATP", "AF", GO_BP$contrast)
+GO_BP$contrast <- gsub("AVB", "AF+AVB", GO_BP$contrast)
+
+GO_BP$contrast <- factor(GO_BP$contrast, levels = c("up.AFvsCTL", "down.AFvsCTL",
+                                                   "up.AF+AVBvsCTL", "down.AF+AVBvsCTL",
+                                                   "up.AFvsAF+AVB", "down.AFvsAF+AVB"))
+
+df <- GO_BP %>% arrange(contrast, -fdr) %>% mutate(order = row_number())
+df$label <- factor(df$label)
+
+# make a named vector with label names for scale_x_discrete
+m <- tolower(str_sub(df$label,4,-1))
+names(m) <- df$order
+
+p <- ggplot(df) +
+  geom_segment(aes(x= factor(order), xend= factor(order), y=0, yend= -log10(fdr)), color="grey") +
+  scale_fill_gradient(low = "#276FBF", high = "darkred") +
+  geom_point(aes(x = factor(order), size = genes.overlap, fill = -log10(fdr), y = -log10(fdr)),colour = "black", shape = 21) +
+  scale_x_discrete(labels = m)+
+  labs(fill = expression(paste(-Log[10],italic("FDR")))) +
+  coord_flip()+
+  theme_minimal(base_size = 10) +
+  theme(
+    panel.background = element_rect(fill = "transparent",colour = NA),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank(),
+    plot.background = element_rect(fill = "transparent",colour = NA),
+    legend.background  = element_rect(fill = "transparent",colour = NA),
+    legend.key = element_rect(fill = "transparent",colour = NA)) +
+  ylab(expression(paste(-Log[10],italic("FDR")))) + xlab("") + ggtitle(NULL) +
+  facet_wrap(~contrast, ncol=1, scale="free_y") 
+
+
+p <- p + theme(legend.position= c(0.8, 0.8)) 
+p
+```
+
+## 3.c-Upset plot Up vs Down regulated genes in 3 contrasts
+
+
+```{r}
+mRNA <- all_res %>% filter(Dataset == "mRNA")
+padj_cols <- grep("padj",colnames(mRNA))
+LFC_cols <- grep("L2FC",colnames(mRNA))
+l<-list()
+
+# Get up and down genes in all 3 contrasts
+for (i in 1:3) {
+  l[[paste0("Up_",substr(padj_cols[i],1,8))]] <- ifelse(mRNA[,padj_cols[i]] < 0.01 & mRNA[,LFC_cols[i]] > 0, TRUE, FALSE)
+  l[[paste0("Down_",substr(padj_cols[i],1,8))]] <- ifelse(mRNA[,padj_cols[i]] < 0.01 & mRNA[,LFC_cols[i]] < 0, TRUE, FALSE)
+}
+
+
+df <- data.frame(t(matrix(unlist(l), nrow=length(l), byrow=T)))
+colnames(df) <- names(l)
+df[is.na(df)] <- FALSE
+df <- df[apply(df, 1, function(x) any(x)),] # remove all fasle rows
+
+colnames(df) <- c("up.AFvsCTL", "down.AFvsCTL","up.AF+AVBvsCTL", "down.AF+AVBvsCTL","up.AFvsAF+AVB", "down.AFvsAF+AVB")
+
+# compare significant genes sets
+upset_p <- upset(df, colnames(df), width_ratio=0.2,sort_sets='ascending', stripes=c(NA , NA ),
+                 set_sizes = upset_set_size(fill="darkred"),
+                 themes=upset_modify_themes(
+                   list(default=theme(
+                     panel.background = element_rect(fill = "transparent",colour = NA),
+                     panel.grid.minor = element_blank(),
+                     panel.grid.major = element_blank(),
+                     plot.background = element_rect(fill = "transparent",colour = NA)))))
+upset_p
+```
+
+
+
+
+```{r}
+patch1 <- (v.ATP.CTL / v.AVB.CTL / v.ATP.AVB) | p 
+
+png("manuscript/Figure3.png", units="in", bg = "transparent", width=10.5, height=12, res=600)
+
+patch1 / upset_p  +
+  plot_layout(heights = c(4, 1)) &
+        theme(plot.margin = unit(c(0,0,0,0), "cm"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.background = element_rect(fill = "transparent",colour = NA),
+              plot.background = element_rect(fill = "transparent",colour = NA),
+              plot.tag = element_text(size = 12))
+dev.off()
+```
+
+
+# Figure 4
+
+## 4.a-Volcano plots (no L2FC)
+
+```{r}
+miRNA <- all_res %>% filter(Dataset == "miRNA")
+
+miRNA$AVBvsCTLL2FC <- -1*(miRNA$CTLvsAVBL2FC) # setting CTL as reference level of expression
+miRNA$ATPvsCTLL2FC <- -1*(miRNA$CTLvsATPL2FC) # setting CTL as reference level of expression
+# miRNA$AVBvsATPL2FC <- -1*(miRNA$AVBvsATPL2FC) # setting AVB as reference level of expression
+
+v.theme <- theme(
+  panel.background = element_rect(fill = "transparent",colour = NA),
+  panel.grid.minor = element_blank(),
+  panel.grid.major = element_blank(),
+  plot.background = element_rect(fill = "transparent",colour = NA),
+  legend.background  = element_rect(fill = "transparent",colour = NA),
+  legend.key = element_rect(fill = "transparent",colour = NA))
+
+max <- -log10(10e-18)
+
+v.AVB.CTL <- EnhancedVolcano(miRNA,
+    lab = miRNA$Gene,
+    transcriptPointSize = 3,
+    transcriptLabSize = 2.5,
+    pLabellingCutoff = 1e-5,
+    legendVisible = F,
+    x = 'AVBvsCTLL2FC',
+    y = 'CTLvsAVBpadj',
+    pCutoff = 0.01,
+    col=c('black', 'black', 'black', 'darkred'),
+    cutoffLineType="blank",
+    cutoffLineCol = 'black',
+    cutoffLineWidth = 0.8,
+    hline = 0.01,
+    hlineCol = 'grey0',
+    hlineType = 'longdash',
+    hlineWidth = 0.8,
+    FCcutoff = 0,
+    title = NULL,
+    caption = NULL,
+    subtitle = NULL,
+    legendPosition = NULL,
+    ylab = NULL,
+    drawConnectors = T,
+    axisLabSize = 9, 
+    ylim = c(0, max),
+    xlim = c(-2.5, 2.5))+
+  geom_label(aes(1.5, max),label=expression("" %up% "AF+AVB"))+
+  geom_label(aes(-1.5, max),label=expression("" %up% "CTL"))
+
+v.AVB.CTL <- v.AVB.CTL + v.theme
+
+#######################
+
+v.ATP.CTL <-EnhancedVolcano(miRNA,
+    lab = miRNA$Gene,
+    transcriptPointSize = 3,
+    transcriptLabSize = 2.5,
+    pLabellingCutoff = 1e-5,
+    legendVisible = F,
+    x = 'ATPvsCTLL2FC',
+    y = 'CTLvsATPpadj',
+    pCutoff = 0.01,
+    col=c('black', 'black', 'black', 'darkred'),
+    cutoffLineType="blank",
+    cutoffLineCol = 'black',
+    cutoffLineWidth = 0.8,
+    hline = 0.01,
+    hlineCol = 'grey0',
+    hlineType = 'longdash',
+    hlineWidth = 0.8,
+    FCcutoff = 0,
+    title = NULL,
+    caption = NULL,
+    subtitle = NULL,
+    legendPosition = NULL,
+    ylab = expression(paste(-Log[10],italic("FDR"))),
+    drawConnectors = T,
+    axisLabSize = 9, 
+    ylim = c(0, max),
+    xlim = c(-2.5, 2.5))+
+  geom_label(aes(1.5, max),label=expression("" %up% "AF") )+
+  geom_label(aes(-1.5, max),label=expression("" %up% "CTL"))
+
+
+v.ATP.CTL <- v.ATP.CTL + v.theme
+
+#######################
+
+v.ATP.AVB <- EnhancedVolcano(miRNA,
+    lab = miRNA$Gene,
+    transcriptPointSize = 3,
+    transcriptLabSize = 2.5,
+    pLabellingCutoff = 1e-5,
+    legendVisible = F,
+    x = 'AVBvsATPL2FC',
+    y = 'AVBvsATPpadj',
+    pCutoff = 0.01,
+    col=c('black', 'black', 'black', 'darkred'),
+    cutoffLineType="blank",
+    cutoffLineCol = 'black',
+    cutoffLineWidth = 0.8,
+    hline = 0.01,
+    hlineCol = 'grey0',
+    hlineType = 'longdash',
+    hlineWidth = 0.8,
+    FCcutoff = 0,
+    title = NULL,
+    caption = NULL,
+    subtitle = NULL,
+    legendPosition = NULL,
+    ylab = NULL,
+    drawConnectors = T,
+    axisLabSize = 9, 
+    ylim = c(0, max),
+    xlim = c(-2.5, 2.5))+
+  geom_label(aes(1.5, max),label=expression("" %up% "AF") )+
+  geom_label(aes(-1.5, max),label=expression("" %up% "AF+AVB"))
+
+v.ATP.AVB <- v.ATP.AVB + v.theme
+
+```
+
+## 4.b-Miami plot miRNAs
+
+```{r}
+pval.cols <- grep("padj", colnames(all_res))
+
+miRNA.DF <- all_res[all_res$Dataset == "miRNA",]
+
+miRNA.DF$chromosome_name[miRNA.DF$chromosome_name == "X"] <- 39
+miRNA.DF[,c("chromosome_name","CTLvsAVBpadj",
+            "CTLvsATPpadj","AVBvsATPpadj")] <- lapply(miRNA.DF[,c("chromosome_name","CTLvsAVBpadj",
+                                                                  "CTLvsATPpadj","AVBvsATPpadj")],as.numeric)
+miRNA.DF <- miRNA.DF[!is.na(miRNA.DF$chromosome_name),]
+miRNA.DF$CTLvsAVBpadj[is.na(miRNA.DF$CTLvsAVBpadj)] <- 1
+miRNA.DF$CTLvsATPpadj[is.na(miRNA.DF$CTLvsATPpadj)] <- 1
+miRNA.DF$AVBvsATPpadj[is.na(miRNA.DF$AVBvsATPpadj)] <- 1
+
+
+miRNA.DF <- dplyr::rename(miRNA.DF, c(CHR = chromosome_name, BP = transcription_start_site, SNP =GENEID, CTLvsAVBpadj = CTLvsAVBpadj))
+
+
+gwas.dat <- miRNA.DF
+gwas.dat <- gwas.dat[order(gwas.dat$CHR),]
+nCHR <- length(unique(gwas.dat$CHR))
+gwas.dat$BPcum <- NA
+s <- 0
+nbp <- c()
+for (i in unique(gwas.dat$CHR)){
+  nbp[i] <- max(gwas.dat[gwas.dat$CHR == i,]$BP)
+  gwas.dat[gwas.dat$CHR == i,"BPcum"] <- gwas.dat[gwas.dat$CHR == i,"BP"] + s
+  s <- s + nbp[i]
+}
+
+axis.set <- gwas.dat %>% 
+  dplyr::group_by(CHR)%>% 
+  dplyr::summarize(center = (max(BPcum) + min(BPcum)) / 2)
+ylim <- abs(floor(log10(min(gwas.dat$CTLvsAVBpadj)))) + 2 
+sig <- 5e-8
+
+manhplot <- ggplot(gwas.dat, aes(x = BPcum, y = -log10(CTLvsAVBpadj))) +
+  geom_point(aes(fill = as.factor(CHR), size = -log10(CTLvsAVBpadj)), shape = 21, alpha = 0.75) +
+  geom_point(aes(x = BPcum, y = (-log10(CTLvsATPpadj))*-1, fill = as.factor(CHR), size = -log10(CTLvsATPpadj))
+             , shape = 21, alpha = 0.75) +
+  scale_x_continuous(label = axis.set$CHR, breaks = axis.set$center) +
+  scale_y_continuous(breaks = pretty(c(-log10(gwas.dat$CTLvsAVBpadj),(-log10(gwas.dat$CTLvsATPpadj))*-1)),
+                     labels = abs(pretty(c(-log10(gwas.dat$CTLvsAVBpadj),(-log10(gwas.dat$CTLvsATPpadj))*-1)))) +
+  scale_fill_manual(values = rep(c("#276FBF", "darkred"), nCHR)) +
+  scale_size_continuous(range = c(0.5,3)) +
+  labs(x = NULL, y=expression(paste(-Log[10],italic("FDR")))) + 
+  theme_minimal() +
+  theme( 
+    legend.position = "none",
+    panel.border = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(),
+    axis.text.x = element_text(angle = 90, size = 8, hjust = 0.5)
+  )
+
+manhplot <- manhplot + 
+  annotate("text",
+           x = min(gwas.dat$BPcum),
+           y = c(-13,13),
+           label = c("AFvsCTL","AF+AVBvsCTL"),
+           colour = "darkred",
+           size = 3,
+           hjust=.2
+           ) + 
+  geom_segment(x = 667085365, xend = 667085365, y = -11, yend = -9,
+               colour = "black", size=1, alpha=.9, arrow=arrow(length=unit(2, "mm"),type="closed"),
+               lineend = "round",linejoin = "round")
+manhplot
+```
+
+
+## 4.c-Upset plot targets dlk1-dio3 locus
+
+```{r}
+targets <- import("miRNA/data/final/dlk1_dio3_targets.RDS")
+
+mirs <- all_res %>%
+  filter(Dataset == "miRNA" &
+           (CTLvsAVBpadj < 0.01) &
+           chromosome_name == "8" &
+           transcription_start_site > 68961744 &
+           transcription_start_site < 69696779) %>% 
+  pull(Gene)
+
+
+targets_names <- targets %>% 
+  pull(SYMBOL) %>% 
+  unique()
+
+l <- list()
+
+for (i in mirs) {
+  for (j in targets_names) {
+    l[[i]] <- c(l[[i]],any(targets$SYMBOL == j & targets$miRNA_Gene == i))
+  }
+}
+
+df <- data.frame(t(matrix(unlist(l), nrow=length(l), byrow=T)))
+colnames(df) <- names(l)
+df[is.na(df)] <- FALSE
+df <- df[,apply(df, 2, function(x) any(x))] # remove all fasle cols
+
+# compare significant genes sets
+upset_p <- upset(df, colnames(df), width_ratio=0.2, height_ratio = 0.8, sort_sets='ascending', stripes=c(NA , NA ),
+                 set_sizes = upset_set_size(fill="darkred"),
+                 themes=upset_modify_themes(
+                   list(default=theme(
+                     panel.background = element_rect(fill = "transparent",colour = NA),
+                     panel.grid.minor = element_blank(),
+                     panel.grid.major = element_blank(),
+                     plot.background = element_rect(fill = "transparent",colour = NA)))))
+```
+
+
+## 4.d-Heatmap pathways dlk1-dio3 synthenic 
+
+
+```{r}
+# create a matrix with our genes in rows and pathways as columns with 0 and 1 for occurences
+all_path <- import("mRNA/data/final/dlk1_dio3_GO_BP.RDS")
+mRNA <- all_res %>% filter(Dataset == "mRNA")
+
+best <- all_path[!is.na(all_path$fdr),]
+row.names(best) <- NULL
+best <-best[1:5,]
+best$label <- paste0(substr(best$label,1,4),tolower(substr(best$label,5,nchar(as.character(best$label)))))
+
+
+df <- data.frame(matrix(ncol = 5, nrow = length(unique(targets_names))))
+colnames(df) <- best$label[1:5]
+row.names(df) <- unique(targets_names)
+df[,] <- 0
+for (i in 1:ncol(df)){
+    for (j in 1:nrow(df)){
+        ifelse(row.names(df)[j] %in% strsplit(best[i,"hits"], ",")[[1]], df[j,i]<-1, df[j,i]<-0)
+    }
+}
+df$targets <- row.names(df)
+
+df.m <- melt(df)
+
+t.14q32 <- data.frame(CTLvsAVB.fdr = mRNA[match(unique(targets_names),mRNA$Gene),"CTLvsAVBpadj"], gene = unique(targets_names))
+df.m$CTLvsAVBpadj <- t.14q32$CTLvsAVB.fdr
+
+# Heatmap for genes present in each pathways
+p1 <- ggplot(data = df.m, aes(x = reorder(targets, CTLvsAVBpadj), y = variable, fill = value)) +
+  geom_tile(color = "black") + 
+  theme_minimal() + 
+  scale_fill_gradient(low = NA, high= "darkred") +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "transparent",colour = NA),
+        plot.background = element_rect(fill = "transparent",colour = NA),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, size=6),
+        legend.position = "none") +
+  ylab(NULL)+ xlab(NULL)
+
+# Side barplot showing fdr for top 5 pathways
+p2 <- ggplot(data = best[1:5,], aes(x = -log10(fdr), y = reorder(label,-log10(fdr)))) +
+  geom_bar(stat="identity", color = "black", fill = "darkred") + 
+  theme_minimal() + 
+  ylab(NULL)+ xlab(NULL) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "transparent",colour = NA),
+        plot.background = element_rect(fill = "transparent",colour = NA),
+        axis.line=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks=element_blank())+
+    annotate("text", x = 3, y = -1.5, label = "~-Log[10]~(FDR)", size = 3, parse = TRUE) +
+    coord_cartesian(xlim = c(0, 6), ylim = c(1, 5), clip = "off")
+
+
+# Top barplot showing fdr for genes in AVBvsCTL
+p3 <- ggplot(data = t.14q32, aes(x = reorder(gene, CTLvsAVB.fdr), y = -log10(CTLvsAVB.fdr))) +
+  geom_bar(stat="identity", color = "black", fill = "darkred") + 
+  theme_minimal() + 
+  ylab(NULL)+ xlab(NULL)+
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "transparent",colour = NA),
+        plot.background = element_rect(fill = "transparent",colour = NA),
+        axis.line=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title.x = element_blank(),
+        panel.border=element_blank())+
+  annotate("text", x = -4, y = 5, label = "~-Log[10]~~italic(FDR )~ AF+AVBvsCTL", angle = 90, size = 3, parse = TRUE) +
+  coord_cartesian(xlim = c(1, 82), ylim = c(0, 10), clip = "off")
+
+
+
+
+patch3 <- p3 + plot_spacer() + p1 + p2 + 
+        plot_layout(ncol=2,nrow=2,widths=c(6,1), heights=c(2,1)) &
+        theme(plot.margin = unit(c(0,0,0,0), "cm"),
+              panel.grid.major = element_blank(), 
+              panel.grid.minor = element_blank(),
+              panel.background = element_rect(fill = "transparent",colour = NA),
+              plot.background = element_rect(fill = "transparent",colour = NA))
+```
+
+## Patchwork fig4 
+
+
+```{r}
+patch1 <- v.ATP.CTL +plot_spacer()+ v.AVB.CTL +plot_spacer()+ v.ATP.AVB + plot_layout(ncol=5, widths=c(10,1,10,1,10)) 
+
+patch2 <- manhplot +plot_spacer()+ upset_p+ plot_layout(ncol=3, widths=c(10,1,8)) 
+
+patch4 <- plot_spacer() + patch3 + plot_layout(ncol=2, widths=c(1,1000)) 
+
+png("manuscript/Figure_4.png", units="in", bg = "transparent", width=12, height=9, res=600)
+
+patch1 / patch2 / patch4 +
+  plot_layout(heights = c(1.5, 1.5, 1.5)) &
+        theme(plot.margin = unit(c(0,0,0,0), "cm"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.background = element_rect(fill = "transparent",colour = NA),
+              plot.background = element_rect(fill = "transparent",colour = NA),
+              plot.tag = element_text(size = 12))
+dev.off()
+```
+
+# Figure 5
+
+See mRNA/litterature_hsa_AF.rmd

@@ -1,0 +1,217 @@
+---
+title: "litterature_hsa_AF"
+author: "Francis Leblanc"
+date: "18/09/2020"
+output:   
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: true
+    code_folding: hide 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+
+```{r}
+library(rio)
+library(tidyverse)
+```
+
+
+# Parse Wu 2020 mRNA results
+
+```{r}
+mRNA_paper <- import("data/litterature/j.hlc.2019.10.018_mRNA_table.txt")
+```
+
+# Parse Larupa 2020 mRNA results
+
+```{r}
+mRNA_paper2 <- import("data/litterature/journal.pone.0232719_DE.mRNA.xlsx")
+mRNA_paper2 <- mRNA_paper2[!duplicated(mRNA_paper2$symbol),]
+```
+
+# Overlap with DE mRNAs list from Dog results
+
+```{r}
+all_res <- import("data/final/all.raw_expression.RDS") #Log transformed results from 4 assays
+
+#get hsa DE gene names 
+mRNA_DE <- all_res %>% 
+  filter(Dataset == "mRNA") %>% 
+  filter_at(vars(CTLvsAVBpadj, CTLvsATPpadj,AVBvsATPpadj), any_vars(.<0.01))
+
+padj_cols <- grep("padj",colnames(mRNA_DE))[1:3]
+padj_cols <- colnames(mRNA_DE)[padj_cols]
+
+mRNA_DE <- mRNA_DE %>% filter(!is.na(hsapiens_homolog_associated_gene_name))
+mRNA_DE <- mRNA_DE %>% filter(hsapiens_homolog_associated_gene_name != "")
+mRNA_DE <- mRNA_DE[!duplicated(mRNA_DE$hsapiens_homolog_associated_gene_name),]
+
+#create boolean DF for DE genes in each contrasts 
+l<-list()
+for (i in 1:3) {
+  l[[paste0(substr(padj_cols[i],1,8))]] <- ifelse(mRNA_DE[,padj_cols[i]] < 0.01 , TRUE, FALSE)
+}
+
+df <- data.frame(t(matrix(unlist(l), nrow=length(l), byrow=T)))
+colnames(df) <- names(l)
+df[is.na(df)] <- FALSE
+row.names(df) <- mRNA_DE$hsapiens_homolog_associated_gene_name
+
+df <- df %>% 
+  rename(
+    ATPvsCTL = CTLvsATP,
+    AVBvsCTL = CTLvsAVB,
+    ATPvsAVB = AVBvsATP)
+
+
+
+Wu2020 <- data.frame(row.names = mRNA_paper$AccID, Wu2020_mRNA=rep(TRUE,nrow(mRNA_paper)))
+Wu2020 <- merge(df, Wu2020 ,by = "row.names", all = TRUE)
+Wu2020[is.na(Wu2020)] <- FALSE
+row.names(Wu2020) <- Wu2020$Row.names
+Wu2020 <- Wu2020[,-1]
+
+Larupa2020 <- data.frame(row.names = mRNA_paper2$symbol, Larupa2020_mRNA=rep(TRUE,nrow(mRNA_paper2)))
+Larupa2020_Wu2020 <- merge(Wu2020, Larupa2020 ,by = "row.names", all = TRUE)
+Larupa2020_Wu2020[is.na(Larupa2020_Wu2020)] <- FALSE
+row.names(Larupa2020_Wu2020) <- Larupa2020_Wu2020$Row.names
+Larupa2020_Wu2020 <- Larupa2020_Wu2020[,-1]
+
+col_order <- c("ATPvsAVB","AVBvsCTL","ATPvsCTL","Larupa2020_mRNA","Wu2020_mRNA")
+Larupa2020_Wu2020 <- Larupa2020_Wu2020[,col_order]
+```
+
+## Simplify to sets intersecting Human and dog data only
+
+
+```{r}
+test <- Larupa2020_Wu2020 %>% 
+  filter_at(vars(AVBvsCTL, ATPvsAVB, ATPvsCTL), any_vars(. == TRUE)) %>% 
+  filter_at(vars(Wu2020_mRNA, Larupa2020_mRNA), any_vars(. == TRUE))
+
+col_order <- c("AVBvsCTL","ATPvsAVB","ATPvsCTL","Larupa2020_mRNA","Wu2020_mRNA")
+test <- test[,col_order]
+
+colnames(test) <- c("AF+AVBvsCTL","AFvsAF+AVB","AFvsCTL","Larupa2020","Wu2020")
+
+upset_p3 <- upset(test, colnames(test), width_ratio=0.2,sort_sets='FALSE', stripes=c(NA , NA ),
+                  set_sizes = upset_set_size(fill="darkred"),
+                  themes=upset_modify_themes(
+                    list(default=theme(
+                     panel.background = element_rect(fill = "transparent",colour = NA),
+                     panel.grid.minor = element_blank(),
+                     panel.grid.major = element_blank(),
+                     plot.background = element_rect(fill = "transparent",colour = NA)))),
+        base_annotations=list('Intersection size'=intersection_size(text=list(size = 3))))
+upset_p3
+
+png("../manuscript/Figure5a.png", units="in", bg = "transparent", width=6, height=3, res=600)
+
+upset_p3 +
+  plot_layout() &
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_rect(fill = "transparent",colour = NA),
+        plot.background = element_rect(fill = "transparent",colour = NA),
+        plot.tag = element_text(size = 10))
+
+dev.off()
+```
+
+
+# Export overlaping genes in table
+
+```{r}
+colnames(mRNA_paper) <- paste0("Wu2020",colnames(mRNA_paper))
+merged <- merge(mRNA_DE,mRNA_paper, by.x = "hsapiens_homolog_associated_gene_name", by.y = "Wu2020AccID", all.x = TRUE)
+
+colnames(mRNA_paper2) <- paste0("Larupa2020",colnames(mRNA_paper2))
+merged <- merge(merged,mRNA_paper2, by.x = "hsapiens_homolog_associated_gene_name", by.y = "Larupa2020symbol", all.x = TRUE)
+
+overlap <- merged %>% filter_at(vars(Wu2020FDR, Larupa2020padj), any_vars(!is.na(.)))
+overlap <- overlap %>% select(hsapiens_homolog_associated_gene_name, CTLvsAVBpadj, CTLvsAVBL2FC,
+                              CTLvsATPpadj, CTLvsATPL2FC, AVBvsATPpadj, AVBvsATPL2FC,
+                              Wu2020FDR,Wu2020FC,Larupa2020padj,Larupa2020log2FoldChange)
+
+export(overlap, "data/litterature/hsaAF_DEG_overlap.xlsx")
+```
+
+
+# Sheep_AF (https://academic.oup.com/cardiovascres/advance-article/doi/10.1093/cvr/cvaa307/5942974)
+
+```{r}
+# Remove NA and duplicated genes
+Sheep_atria <- import("data/litterature/Sheep_AF_atria.xlsx")
+Sheep_atria <- Sheep_atria %>% filter(hsapiens_homolog_associated_gene_name !="NA")
+Sheep_CM <- import("data/litterature/Sheep_AF_CM.xlsx")
+Sheep_CM <- Sheep_CM %>% filter(hsapiens_homolog_associated_gene_name !="NA")
+
+sheep <- merge(Sheep_atria, Sheep_CM, by="hsapiens_homolog_associated_gene_name", suffixes = c(".A",".CM"))
+sheep <- sheep %>% filter(!duplicated(hsapiens_homolog_associated_gene_name))
+```
+
+## Hits from their DE Chromatin pathways  
+
+```{r}
+# The following list was created by combining the results from their tableS3:geneSymbol column of ;
+# pathways :chromatin DNA binding, chromatin binding, covalent chromatin modification
+ 
+chromatin_genes_sheep <- c("CREBBP", "CTCF", "BRD4", "NKX2-5", "TSHZ1", "KLHDC3", "SRF", "HDAC5", "SMC1A", "MBD5", "MEF2A", "TRIM24", "DEK", "RAD21", "PHF13", "SMARCA2", "ZEB1", "KAT2B", "FOXO4", "CALCOCO1", "KDM3B", "NCOA1", "STAT5B", "PPARGC1A", "H3F3B", "SMARCD2", "H2AFZ", "RARA", "MTA2", "RELA", "APEX1", "HDAC1", "EHMT1", "SIN3A", "MBTD1", "NSD1", "ARID1A", "SIRT1", "KDM2A", "EPC2", "USP21", "NCOA3", "SMARCC2", "NIPBL", "EPC1", "CECR2", "DOT1L", "KMT5B", "MTF2", "BCL6", "DPF3", "NRIP1", "SHPRH", "SIN3A", "KAT6A", "AHCTF1", "NFATC1", "JMJD1C", "RNF40", "MYC", "JUN", "H1FX", "ICE1", "SAP130", "NFE2L2", "POLA1", "KAT5", "TOX4", "KDM3A")
+
+chromatin_genes_sheep <- unique(chromatin_genes_sheep)
+
+# filter genes DE in Dog AF and keep L2FC columns
+DE_chrom_g <- mRNA_DE %>%
+  filter(hsapiens_homolog_associated_gene_name %in% chromatin_genes_sheep) %>% 
+  dplyr::select(Gene, CTLvsAVBL2FC, CTLvsATPL2FC)
+
+# order by L2FC of AVB
+DE_chrom_g <- DE_chrom_g[!is.na(DE_chrom_g$Gene),]
+DE_chrom_g <- DE_chrom_g[DE_chrom_g$Gene != "",]
+
+DE_chrom_g$Gene <- factor(DE_chrom_g$Gene,
+                 levels = DE_chrom_g$Gene[order(DE_chrom_g$CTLvsAVBL2FC)])
+
+# Rename with CTL as baseline
+colnames(DE_chrom_g)[2:3] <- c("AVBvsCTLL2FC", "ATPvsCTLL2FC")
+DE_chrom_g[,2:3]<-DE_chrom_g[,2:3]*-1
+
+DE_chrom_g <- cbind(DE_chrom_g, sheep[match(DE_chrom_g$Gene,sheep$hsapiens_homolog_associated_gene_name),
+                         c("logFC_L_ChronicvsControl.CM", "logFC_L_TransitionvsControl.CM")]) 
+
+
+
+# Rename with CTL as baseline
+m <- melt(DE_chrom_g)
+
+# plot comparing L2FC
+p<-ggplot(m)+
+  geom_point(aes(Gene, value, fill=variable),alpha = 0.8, size=3, shape=21) +
+  theme_minimal() +
+  geom_hline(aes(yintercept=0), colour ="black") +
+  ylab("Log2 Fold Change vs CTL") + xlab("Genes")+
+  ggtitle("") +
+  scale_fill_manual(name="CTL contrasted group",
+                      values= c("#b80909","darkblue", "#bce3ba", "#449c40"),
+                      breaks=c("AVBvsCTLL2FC", "ATPvsCTLL2FC", 
+                               "logFC_L_ChronicvsControl.CM", "logFC_L_TransitionvsControl.CM"),
+                      labels=c("AF+AVB", "AF", "Sheep_Chron", "Sheep_Trans"))+
+  theme(
+    legend.background  = element_rect(fill = "transparent",colour = NA),
+    legend.key = element_rect(fill = "transparent",colour = NA),
+    axis.text.x = element_text(angle = 45, hjust = 1))
+p
+ggsave("../manuscript/Figure5b.png",
+       p,width = 8,height = 5, dpi = 600, bg = "transparent")
+
+```

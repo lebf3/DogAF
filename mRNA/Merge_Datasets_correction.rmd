@@ -1,0 +1,150 @@
+---
+title: "Merge_Datasets_correction"
+author: "Francis Leblanc"
+date: "20/07/2020"
+output:   
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: true
+    code_folding: hide 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+library(rio)
+library(biomaRt)
+library(limma)
+```
+
+# Merge mRNA, miRNA, Protein Datasets 
+
+## Import 3 datasets
+
+```{r}
+mRNA <- import("data/final/gene_lvl_mRNA.RDS")
+miRNA <- import("../miRNA/data/final/miRNA.RDS")
+proteins <- import("../Proteomic/data/protein.xlsx")
+colnames(proteins)[1:18] <- gsub("-","",colnames(proteins)[1:18])
+```
+
+## Write one table with all results
+
+```{r}
+avb <- c("AVB1","AVB2","AVB3","AVB4","AVB5","AVB6")
+atp <- c("ATP11","ATP2","ATP4","ATP6","ATP8","ATP9")
+ctl <- c("CTL10","CTL12","CTL13","CTL14","CTL15","CTL2")
+
+# order dataset to merge
+mRNA$Dataset <- rep("mRNA",nrow(mRNA))
+cols <- c("lfg_CTLvsAVBlog2FoldChange","lfg_CTLvsAVBpadj",
+                   "lfg_CTLvsATPlog2FoldChange","lfg_CTLvsATPpadj",
+                   "lfg_AVBvsATPlog2FoldChange" ,"lfg_AVBvsATPpadj",
+                   "LRT_padj","GENEID","Dataset",avb,atp,ctl)
+
+miRNA$Dataset <- rep("miRNA",nrow(miRNA))
+
+all_res <- merge(mRNA, miRNA, all=T)
+all_res <- all_res[,cols]
+```
+
+## Get annotation from canfam3.1 genes
+
+```{r}
+mart <- biomaRt::useMart(biomart = "ensembl",
+                         dataset = "clfamiliaris_gene_ensembl")
+
+ttg <- biomaRt::getBM(
+  attributes = c("external_gene_name",
+                 "description",
+                 "transcript_biotype",
+                 "ensembl_gene_id",
+                 "transcription_start_site",
+                 "chromosome_name"),  mart = mart)
+
+# Get annotation from hsa homologues
+ttg2 <- biomaRt::getBM(
+  attributes = c("ensembl_gene_id",
+                 "hsapiens_homolog_associated_gene_name",
+                 "hsapiens_homolog_chromosome"),  mart = mart)
+
+# merge annotations on ENSG IDs
+ttg3 <- merge(ttg,ttg2, by="ensembl_gene_id")
+ttg3 <- ttg3[which(!duplicated(ttg3$ensembl_gene_id)),]
+all_res <- merge(all_res, ttg3, by.x="GENEID",by.y="ensembl_gene_id", all.x=T)
+all_res$Gene <- all_res$external_gene_name
+
+# add Gene column with best gene name (see code from miRNA.rmd)
+idx <- match(miRNA$GENEID, all_res[which(all_res$Dataset == "miRNA"),"GENEID"])
+all_res$Gene[which(all_res$Dataset == "miRNA")][idx] <- miRNA$Gene
+```
+
+## merge with protein
+
+```{r}
+proteins$lfg_AVBvsATPlog2FoldChange <- -1*proteins$ATPvsAVB_L2FC
+proteins$lfg_CTLvsAVBlog2FoldChange <- -1*proteins$AVBvsCTL_L2FC
+proteins$lfg_CTLvsATPlog2FoldChange <- -1*proteins$ATPvsCTL_L2FC
+
+proteins <- proteins %>% 
+  dplyr::rename(
+  lfg_AVBvsATPpadj = ATPvsAVB_fdr,
+  lfg_CTLvsATPpadj = ATPvsCTL_fdr,
+  lfg_CTLvsAVBpadj = AVBvsCTL_fdr,
+  LRT_padj = F.p.adj,
+  Gene = best_gene_name,
+  description = 'Fasta headers')
+  
+proteins$GENEID <- rep(NA,nrow(proteins))
+proteins$Gene_biotype <- rep("protein_coding",nrow(proteins))
+proteins$Dataset <- rep("proteins",nrow(proteins))
+
+proteins <- proteins[,c(cols,"Gene","description")]
+
+cols <- c('Gene','lfg_CTLvsAVBlog2FoldChange','lfg_CTLvsAVBpadj',
+  'lfg_CTLvsATPlog2FoldChange','lfg_CTLvsATPpadj',
+  'lfg_AVBvsATPlog2FoldChange','lfg_AVBvsATPpadj',"LRT_padj",
+  'Dataset','external_gene_name','GENEID','description','transcript_biotype',
+  'transcription_start_site','chromosome_name','hsapiens_homolog_associated_gene_name',
+  'hsapiens_homolog_chromosome',avb,atp,ctl)
+
+all_res <- merge(all_res, proteins, all=T)
+all_res <- all_res[,cols]
+```
+
+# Create DF with corrected expression values for FB fraction
+
+```{r}
+fraction.c <- rio::import("data/final/CIBERSORTx.xlsx")
+fraction.c <- fraction.c[match(c(avb,atp,ctl),fraction.c$Mixture),]
+
+condition <- factor(c(rep("AVB",6),rep("ATP",6),rep("CTL",6)), levels = c("AVB", "ATP", "CTL"))
+design <- model.matrix(~0 + fraction.c$fibroblast + condition)
+colnames(design) <- c("FB", "AVB", "ATP", "CTL")
+colnames(all_res) <- gsub("lfg_","",colnames(all_res))
+all_res <- all_res %>% dplyr::rename(
+  CTLvsAVBL2FC = CTLvsAVBlog2FoldChange,
+  CTLvsATPL2FC = CTLvsATPlog2FoldChange,
+  AVBvsATPL2FC = AVBvsATPlog2FoldChange)
+
+all_res_cor <- all_res
+all_res_cor[,c(avb,atp,ctl)]  <- limma::removeBatchEffect(all_res[,c(avb,atp,ctl)], covariates = design[,1], design = design[,2:4])
+
+export(all_res_cor,"data/final/all.FB.corrected_expressions.RDS")
+export(all_res,"data/final/all.raw_expression.RDS")
+```
+
+## Write Sup. Table
+```{r}
+all_res_sup <- readRDS("data/final/all.raw_expression.RDS")
+colnames(all_res_sup) <- gsub("ATP", "AF", colnames(all_res_sup))
+colnames(all_res_sup) <- gsub("AVB", "AF+AVB", colnames(all_res_sup))
+all_res_sup[,c(2,4,6)] <- all_res_sup[,c(2,4,6)]*-1
+colnames(all_res_sup)[c(2,4,6)] <- c("AF+AVBvsCTLL2FC", "AFvsCTLL2FC", "AFvsAF+AVBL2FC")
+rio::export(all_res_sup, "data/final/all_res.sup.table.xlsx")
+```

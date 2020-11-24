@@ -1,0 +1,147 @@
+---
+title: "mRNA"
+author: "Francis Leblanc"
+date: "18/11/2020"
+output:   
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: true
+    code_folding: hide 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, warning=FALSE, results = 'hide', message=FALSE}
+library(rhdf5)
+library(DESeq2)
+library(biomaRt)
+library(tidyverse)
+library(rio)
+library(tximport)
+```
+
+# Deconvolution code 
+## same code as above without fibroblast as covariate
+```{r}
+###### gene expression matrix used in CIBERSORTx 
+# fpkm_res <- fpkm(dds, robust = TRUE) 
+# saveRDS(fpkm_res, "data/final/fpkm_AF.RDS")
+
+###### Get ENS ID for dog corresponding to the signature matrix derived from mouse atrium
+# library(stringr)
+# t <- read.table("data/final/Atrium_mouse_signature_matrix.table", header = T)
+# t$Signature_genes <- str_split(as.character(t$Signature_genes), "\\.", simplify = T)[,1]
+# 
+# fpkm_AF <- as.data.frame(readRDS("data/final/fpkm_AF.RDS"))
+# colnames(fpkm_AF) <- colnames(all_res)[25:42]
+# fpkm_AF$Gene <- row.names(fpkm_AF)
+# fpkm_AF <- fpkm_AF[,c(19,1:18)]
+# 
+# ensembl.cfa <- biomaRt::useMart(biomart = "ensembl", dataset = "clfamiliaris_gene_ensembl")
+# ttg <- biomaRt::getBM(
+#   attributes = c("ensembl_gene_id",
+#                  "hsapiens_homolog_ensembl_gene"),
+#   mart = ensembl.cfa,
+#   filters = "ensembl_gene_id",
+#   values = all_res$GENEID)
+# all_res <- import("data/final/all.raw_expression.RDS")
+# 
+# t.m <- merge(ttg, t, by.x="hsapiens_homolog_ensembl_gene", by.y="Signature_genes", all.y = T)
+# 
+# colnames(t.m)[2] <- "Gene"
+# t.m <- t.m[!is.na(t.m$Gene),2:10]
+
+####### Gene signature matrix used in CIBERSORTx
+# write.table(t.m, "data/final/Atrium_mouse_signature_matrix.cfa.table",
+#             row.names = F, quote = F, na = "0", sep = "\t")
+# write.table(fpkm_AF, "data/final/fpkm.cfa.table",row.names = F, quote = F, na = "0", sep = "\t")
+```
+
+
+
+# Kallisto gene level quantification 
+
+```{r}
+# recover genes matching transcripts
+mart <- biomaRt::useMart(biomart = "ENSEMBL_MART_ENSEMBL",
+                         dataset = "clfamiliaris_gene_ensembl")
+ttg <- biomaRt::getBM(
+  attributes = c("ensembl_transcript_id",
+                 "transcript_version",
+                 "ensembl_gene_id"),
+  mart = mart)
+
+ttg <- dplyr::rename(ttg,
+                     TXNAME = ensembl_transcript_id,
+                     GENEID = ensembl_gene_id)
+
+ttg$TXNAME <- paste(ttg$TXNAME, ttg$transcript_version, sep='.')
+ttg2 <- dplyr::select(ttg, c('TXNAME', 'GENEID'))
+
+# Create txi object from kallisto .h5 files
+dir <- "data/raw"
+samples <- list.files("data/raw/")[1:18]
+files <- file.path(dir, samples, "abundance.h5")
+txi.kallisto <- tximport(files, type = "kallisto", tx2gene = ttg2, ignoreAfterBar = TRUE)
+```
+
+# Differential expression analysis with DEseq2
+
+```{r}
+# import deconvolution results
+deconv.res <- import("data/final/CIBERSORTx.xlsx")
+
+# create colData table
+sampleTable <- data.frame(sample = samples,
+                          condition = c(rep(c("ATP","AVB","CTL"), each = 6)))
+sampleTable$sample <- gsub("1W_ATP-", "ATP", sampleTable$sample)
+sampleTable$sample <- gsub("1W_ATP_AVB-", "AVB", sampleTable$sample)
+deconv.res <- deconv.res[match(sampleTable$sample ,deconv.res$Mixture),]
+
+# merge cell type fractions by sample 
+sampleTable <- cbind(sampleTable, deconv.res[,c(2:9)])
+row.names(sampleTable) <- sampleTable$sample
+
+# include fibroblast fraction as covariate
+des <- ~ fibroblast + condition
+dds <- DESeqDataSetFromTximport(txi = txi.kallisto, colData = sampleTable, design = des)
+dds <- estimateSizeFactors(dds)
+idx <- rowSums(assay(dds) == 0) < 12
+dds <- dds[idx,]
+
+dds_LRT <- DESeq(dds, test="LRT", reduced= ~fibroblast)
+res_LRT <- results(dds_LRT)
+
+dds <- DESeq(dds)
+rld<-rlog(dds, blind=F)
+
+# 3 contrasts 
+lfg_CTLvsAVB <- as.data.frame(lfcShrink(dds, contrast=c("condition","CTL","AVB")))
+colnames(lfg_CTLvsAVB) <- paste0('lfg_CTLvsAVB', colnames(lfg_CTLvsAVB))
+
+lfg_CTLvsATP <- as.data.frame(lfcShrink(dds, contrast=c("condition","CTL","ATP")))
+colnames(lfg_CTLvsATP) <- paste0('lfg_CTLvsATP', colnames(lfg_CTLvsATP))
+
+lfg_AVBvsATP <- as.data.frame(lfcShrink(dds, contrast=c("condition","AVB","ATP")))
+colnames(lfg_AVBvsATP) <- paste0('lfg_AVBvsATP', colnames(lfg_AVBvsATP))
+
+# merge results and export
+total <- as.data.frame(assay(rld))
+total[,19:20] <- lfg_CTLvsAVB[,c(2,6)]
+total[,21:22] <- lfg_CTLvsATP[,c(2,6)]
+total[,23:24] <- lfg_AVBvsATP[,c(2,6)]
+total$LRT_padj <- res_LRT$padj
+GENEID <- row.names(total)
+
+total <- add_column(total, GENEID, .before = 1)
+
+export(total, "data/final/gene_lvl_mRNA.RDS")
+```
+
+
+
+
+

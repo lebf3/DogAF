@@ -1,0 +1,140 @@
+---
+title: "miRNA_targets"
+author: "Francis Leblanc"
+date: "20/11/2020"
+output:   
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: true
+    code_folding: hide 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+
+```{r}
+library(rio)
+library(dplyr)
+library(miRNAtap)
+library(org.Hs.eg.db)
+```
+
+
+# Investigating overlaping targets predicted by 5 databes with DE genes 
+\n
+
+
+**MiRNAtap** aggregates targets from 5 most commonly cited prediction algorithms:
+
+* DIANA (Maragkakis et al., 2011),
+* Miranda (Enright et al., 2003), 
+* PicTar (Lallet al., 2006), 
+* TargetScan (Friedman et al., 2009), and 
+* miRDB (Wong and Wang,2015).
+
+#### The results are given in searchable tables
+\n
+The *SYMBOL* column is human gene names. 
+If no gene names was found for that human gene in CanFam3.1, no correlations can be obtained and correlation column is empty (this is the case for ~50 of the targets called with these miRNAs)
+Navigate the table to page 6 to start seing the correlations or use sorting on columns.
+The Protein tables are at the end of the document.
+\n
+
+# Overlap of targets and DE mRNAs
+
+## dlk1_dio3
+
+```{r}
+all_res <- import("../mRNA/data/final/all.FB.corrected_expressions.RDS")
+miRNAs <- all_res %>% filter(Dataset == "miRNA" & chromosome_name == 8 & CTLvsAVBpadj < 0.01)
+
+# subset miRNA DE from dlk1-dio3 locus
+dlk1_dio3 <- miRNAs %>% pull(Gene) 
+dlk1_dio3 <- dlk1_dio3[-grep("ENS",dlk1_dio3)]
+dlk1_dio3 <- gsub("MIR", "mir-", dlk1_dio3)
+
+df <- data.frame(source_1=integer(),
+                 source_2=integer(),
+                 source_3=integer(),
+                 source_4=integer(),
+                 source_5=integer(),
+                 rank_product=integer(),
+                 rank_final=integer(),
+                 miRNA = character(),
+                 ENTREZ = character())
+
+# Query miRNA target databases
+for (i in dlk1_dio3) {
+  df1 <- as.data.frame(getPredictedTargets(i, species = 'hsa', method = 'geom', min_src = 3))
+  df1$miRNA <- i
+  df1$ENTREZ <- row.names(df1)
+  df <- dplyr::bind_rows(df,df1)}
+
+# Get miRNA
+Symb_Entr <- select(org.Hs.eg.db, df$ENTREZ, "SYMBOL", "ENTREZID")
+df$SYMBOL <- Symb_Entr$SYMBOL
+
+# Keep DE mRNAs only
+DE_mRNA_CTLvsAVB <- all_res %>% filter(Dataset == "mRNA" & CTLvsAVBpadj < 0.01) %>% pull(Gene)
+DE_targets_CTLvsAVB <- df[df$SYMBOL %in% DE_mRNA_CTLvsAVB,]
+
+# Rename miRNAs to match original data
+DE_targets_CTLvsAVB$miRNA_Gene <- gsub("mir-", "MIR", DE_targets_CTLvsAVB$miRNA)
+```
+
+
+# Filter based on negative correlation
+
+```{r}
+DE_targets.all <- DE_targets_CTLvsAVB
+DE_targets.all$cors <- NA
+
+#extract pearson correlations
+for(i in unique(DE_targets_CTLvsAVB$miRNA_Gene)) {
+  #get targets 
+  targets <- DE_targets_CTLvsAVB$SYMBOL[DE_targets_CTLvsAVB$miRNA_Gene == i]
+  targets <- targets[targets != "" & !(is.na(targets))]
+  
+  #get expression values from mRNA for the targets of that miRNA
+  mRNA.x <- all_res[match(targets, all_res$Gene),c(16,18:35)]
+  colnames(mRNA.x)[1] <- "Gene"
+
+  #add expression values from the miRNA and transpose
+  mRNA.x <- rbind(miRNAs[miRNAs$Gene == i,c(1,18:35)], mRNA.x)
+  mRNA.x.m <- data.matrix(mRNA.x[,2:19], rownames.force = NA)
+  mRNA.x.m <- t(mRNA.x.m)
+  
+  #get correlation values 
+  cors <- data.frame(cor(mRNA.x.m))
+  colnames(cors) <- mRNA.x$Gene
+  
+  #make a dataframe to merge previous informations
+  cors_f <- data.frame(miRNA_Gene = colnames(cors)[1],
+                     SYMBOL = as.character(colnames(cors)[2:length(colnames(cors))]),
+                     cor.tmp = cors[2:length(colnames(cors)),1])
+
+  DE_targets.all <- merge(DE_targets.all, cors_f, all.x = T) 
+  
+  #add i's targets correlations to cors
+  DE_targets.all$cors[is.na(DE_targets.all$cors)] <- DE_targets.all$cor.tmp[is.na(DE_targets.all$cors)]
+  
+  #remove tmp col
+  DE_targets.all <- subset(DE_targets.all, select = -cor.tmp)
+
+}
+
+# filter based on negative correlation
+DE_targets.filt <- DE_targets.all %>% filter(cors < -0.5)
+
+
+export(DE_targets.filt, "data/final/dlk1_dio3_targets.RDS")
+```
+

@@ -1,0 +1,206 @@
+---
+title: "Proteomic"
+author: "Francis Leblanc"
+date: "18/11/2020"
+output:   
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: true
+    code_folding: hide 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F)
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+pacman::p_load(DEP,
+               ggplot2,
+               biomaRt,
+               dplyr,
+               limma,
+               stringr,
+               reshape2,
+               rio,
+               tidyverse)
+```
+
+
+# Import Data and reannotate
+
+Gene names annotated differ for some genes from uniprot in proteomic dataset files.
+The protein file does not prioritize 1 protein per line.
+I can therefore only keep proteins mapping to a single gene.
+
+```{r}
+ensembl.cfa <- biomaRt::useMart(biomart = "ensembl", dataset = "clfamiliaris_gene_ensembl")
+ttg <- biomaRt::getBM(
+  attributes = c("uniprot_gn_id","external_gene_name"),  mart = ensembl.cfa)
+
+prot <- import("data/matrix-91_withNaN_proteome.xlsx")
+
+prot$uniprot_gene_name <- NA
+maj.prot <- prot$`Majority protein IDs`
+
+# Create a column with uniprot matching genes of Majority protein IDs
+for (i in 1:length(maj.prot)) {
+  # if multiple proteins are called, match all uniprot gene names 
+  if (grepl(";",maj.prot[i])) {
+    v <- as.vector(strsplit2(maj.prot[i],";")[1,])
+    l <- c()
+    for (j in 1:length(v)) {
+      l<-c(l,ttg$external_gene_name[match(v[j],ttg$uniprot_gn_id)])
+      l<-unique(l)
+    }
+    prot[i,"uniprot_gene_name"] <- paste(l,collapse = ";")
+  }
+  else {
+    prot[i,"uniprot_gene_name"] <- paste(ttg$external_gene_name[
+      match(maj.prot[i],ttg$uniprot_gn_id)
+      ],collapse = ";")
+  }
+}
+
+# Keep FASTA header gene names if no genes were found for this protein in uniprot
+prot$best_gene_name <- ifelse(prot$uniprot_gene_name == "" | prot$uniprot_gene_name == "NA",
+                                  prot$`Gene name`, prot$uniprot_gene_name)
+
+prot$gene_protein <- paste0(prot$`Gene name`,"_",prot$`Majority protein IDs`)
+
+prot$best.gene_protein <- paste0(prot$best_gene_name,"_",prot$`Majority protein IDs`)
+
+export(prot,"data/proteome_uniprot.xlsx")
+```
+
+
+
+
+# Remove proteins missing in more then 3 replicates 
+
+```{r}
+data_NaN <- import("data/proteome_uniprot.xlsx")
+colnames(data_NaN)[1:18] <- gsub("LFQ intensity ","",colnames(data_NaN)[1:18])
+
+# subset assay data
+data_NaN_df <- data_NaN[,1:18]
+data_NaN_df$Majority_protein_IDs <- data_NaN$gene_protein
+data_NaN_df <- data_NaN_df[order(data_NaN_df$Majority_protein_IDs),]
+data_NaN_df[data_NaN_df == "Na"] <- NA # replace NaN fo NA
+
+# Select Proteins with <= 3 missing
+idx <- which(rowSums(is.na(data_NaN_df[,1:6])) > 3 |
+             rowSums(is.na(data_NaN_df[,7:12])) > 3 |
+             rowSums(is.na(data_NaN_df[,13:18])) > 3)
+
+data <- data_NaN_df[-idx,]
+```
+
+## Design  
+
+```{r}
+experimental_design <- data.frame(colnames(data[,1:18]))
+experimental_design$condition <- as.character(c(rep("CTL", 6),rep("ATP", 6), rep("AVB", 6)))
+experimental_design$condition <- factor(experimental_design$condition, levels = c("CTL","ATP","AVB"))
+
+colnames(experimental_design)[1] <- "label"
+experimental_design$label <- as.character(experimental_design$label)
+experimental_design$replicate <- rep(seq(6),3)
+```
+
+
+## Get unique IDs  
+
+```{r}
+LFQ_columns <- seq(1:18)
+
+data %>% group_by(Majority_protein_IDs) %>% summarize(frequency = n()) %>% 
+  arrange(desc(frequency)) %>% filter(frequency > 1)
+
+data$Protein.IDs <- seq(nrow(data))
+data_unique <- make_unique(data, "Majority_protein_IDs", "Protein.IDs", delim = ";")
+
+data_unique[1:18] <- apply(data_unique[1:18],2,as.numeric)
+
+data_unique[1:18] <- 2^data_unique[1:18]
+
+data_se <- make_se(data_unique, LFQ_columns, experimental_design)
+
+```
+
+## Normalizing expression  
+
+```{r}
+data_norm <- normalize_vsn(data_se)
+plot_normalization(data_norm, data_se)
+```
+
+## Impute with 10th quantile  
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+set.seed(1234)
+data_imp_q0.1 <- impute(data_norm, fun = "MinProb", q = 0.10)
+```
+
+# DEP with limma
+
+```{r}
+################## MinProb_q0.1 ###############
+df_wide_MinProb_q0.1 <- get_df_wide(dep.min_q0.1)
+
+
+# import cells fractions
+fraction.c <- import("../../mRNA/data/final/CIBERSORTx_Job2_Results.xlsx")
+fraction.c$condition <- factor(c(rep("AVB",6),rep("ATP",6),rep("CTL",6)), levels = c("CTL", "ATP", "AVB"))
+
+colnames(df_wide_MinProb_q0.1)[2:19] <- experimental_design$label
+colnames(df_wide_MinProb_q0.1)[2:19] <- str_remove(colnames(df_wide_MinProb_q0.1)[2:19],"-")
+fraction.c <- fraction.c[match(colnames(df_wide_MinProb_q0.1)[2:19], fraction.c$Mixture),]
+
+#Model fitting 
+row.names(df_wide_MinProb_q0.1) <-df_wide_MinProb_q0.1$name
+colnames(df_wide_MinProb_q0.1)[2:19] <-experimental_design$label
+
+design <- model.matrix(~ 0+ fraction.c$fibroblast + experimental_design$condition )
+colnames(design) <- c("FB", "CTL", "ATP", "AVB")
+row.names(design) <- colnames(df_wide_MinProb_q0.1)[2:19]
+
+x <- c("ATP-CTL","AVB-CTL","ATP-AVB")
+contrast =  makeContrasts(contrasts=x,levels=design)
+
+fit<-lmFit(df_wide_MinProb_q0.1[,2:19], design)
+
+fit2 <- contrasts.fit(fit,contrasts = contrast)
+
+fit3<-eBayes(fit2, trend=TRUE)
+
+df_wide_MinProb_q0.1$F.p.value <- fit3$F.p.value
+
+df_wide_MinProb_q0.1$F.p.adj <- p.adjust(fit3$F.p.value, method = "fdr", n = length(fit3$F.p.value))
+
+results <- decideTests(fit3)
+
+vennDiagram(results)
+
+colnames(coef(fit3))
+results.ATPvsCTL <- topTable(fit3 ,coef=1, number=Inf)
+results.AVBvsCTL <- topTable(fit3 ,coef=2, number=Inf)
+results.ATPvsAVB <- topTable(fit3 ,coef=3, number=Inf)
+
+df_wide_MinProb_q0.1$ATPvsCTL_L2FC <- results.ATPvsCTL[df_wide_MinProb_q0.1$name,"logFC"]
+df_wide_MinProb_q0.1$ATPvsCTL_fdr <- results.ATPvsCTL[df_wide_MinProb_q0.1$name,"adj.P.Val"]
+
+df_wide_MinProb_q0.1$ATPvsAVB_L2FC <- results.ATPvsAVB[df_wide_MinProb_q0.1$name,"logFC"]
+df_wide_MinProb_q0.1$ATPvsAVB_fdr <-  results.ATPvsAVB[df_wide_MinProb_q0.1$name,"adj.P.Val"]
+
+df_wide_MinProb_q0.1$AVBvsCTL_L2FC <- results.AVBvsCTL[df_wide_MinProb_q0.1$name,"logFC"]
+df_wide_MinProb_q0.1$AVBvsCTL_fdr <- results.AVBvsCTL[df_wide_MinProb_q0.1$name,"adj.P.Val"]
+
+df_wide_MinProb_q0.1_subset <- df_wide_MinProb_q0.1[,c(2:21,23:24,44:51)]
+colnames(df_wide_MinProb_q0.1_subset)[19] <- "gene_protein"
+df_wide_MinProb_q0.1_subset <- merge(df_wide_MinProb_q0.1_subset, data_NaN[,19:43], by="gene_protein")
+df_wide_MinProb_q0.1_subset <- df_wide_MinProb_q0.1_subset[,c(2:54,1)]
+
+# export(df_wide_MinProb_q0.1_subset, "data/protein_MinProb_q0.1_filtered.FB.cov.xlsx")
+```
+

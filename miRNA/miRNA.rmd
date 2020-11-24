@@ -1,0 +1,122 @@
+---
+title: "miRNA"
+author: "Francis Leblanc"
+date: "18/11/2020"
+output:   
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: true
+    code_folding: hide 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, warning=FALSE, results = 'hide', message=FALSE}
+library(rhdf5)
+library(DESeq2)
+library(biomaRt)
+library(tidyverse)
+library(rio)
+library(org.Cf.eg.db)
+```
+
+
+# Read STAR output
+
+```{r}
+ff <- list.files(path = "data/raw/readspergenes/" , pattern = "*ReadsPerGene.out.tab$", full.names = TRUE)
+counts.files <- lapply(ff, read.table, skip = 4)
+counts <- as.data.frame(sapply(counts.files, function(x) x[,2]))
+
+# rename samples
+headers <- str_remove(ff, "ReadsPerGene.out.tab")
+headers <- str_remove(headers, "data/raw/readspergenes/star-2pass_out.")
+headers <- gsub("1W_ATP-", "ATP", headers)
+headers <- gsub("1W_ATP_AVB-", "AVB", headers)
+headers <- gsub("CTL15_2", "CTL15", headers)
+
+colnames(counts) <- headers
+row.names(counts) <- counts.files[[1]]$V1
+```
+
+
+# Differential expression analysis with DEseq2
+
+```{r}
+sampleTable <- data.frame(samples = colnames(counts),
+                          condition = c(rep(c("ATP","AVB","CTL"), each = 6)))
+
+deconv.res <- import("../mRNA/data/final/CIBERSORTx.xlsx")
+sampleTable <- sampleTable[match(colnames(counts),sampleTable$sample),]
+
+deconv.res <- deconv.res[match(sampleTable$sample ,deconv.res$Mixture),]
+sampleTable <- cbind(sampleTable, deconv.res[,c(2:9)])
+row.names(sampleTable) <- sampleTable$sample
+
+
+des <- ~ fibroblast + condition
+dds <- DESeqDataSetFromMatrix(counts, colData = sampleTable, design = des)
+
+dds_LRT <- DESeq(dds, test="LRT", reduced= ~fibroblast)
+res_LRT <- results(dds_LRT)
+
+dds <- DESeq(dds)
+rld <- rlog(dds, blind=F)
+```
+
+
+# 3 contrasts 
+
+```{r}
+lfg_CTLvsAVB <- as.data.frame(lfcShrink(dds, contrast=c("condition","CTL","AVB")))
+colnames(lfg_CTLvsAVB) <- paste0('lfg_CTLvsAVB', colnames(lfg_CTLvsAVB))
+
+lfg_CTLvsATP <- as.data.frame(lfcShrink(dds, contrast=c("condition","CTL","ATP")))
+colnames(lfg_CTLvsATP) <- paste0('lfg_CTLvsATP', colnames(lfg_CTLvsATP))
+
+lfg_AVBvsATP <- as.data.frame(lfcShrink(dds, contrast=c("condition","AVB","ATP")))
+colnames(lfg_AVBvsATP) <- paste0('lfg_AVBvsATP', colnames(lfg_AVBvsATP))
+
+# merge results
+total <- as.data.frame(assay(rld))
+total[,19:20] <- lfg_CTLvsAVB[,c(2,6)]
+total[,21:22] <- lfg_CTLvsATP[,c(2,6)]
+total[,23:24] <- lfg_AVBvsATP[,c(2,6)]
+total$LRT_padj <- res_LRT$padj
+GENEID <- row.names(total)
+
+total <- add_column(total, GENEID, .before = 1)
+```
+
+
+# Add gene names
+
+```{r}
+# from STAR alignment
+geneinfo <- fread("data/tmp/geneInfo.tab")
+geneinfo <- geneinfo[match(total$GENEID, geneinfo$GENEID),c("GENEID", "external_gene_name")]
+
+# Find names of genes missing
+library("org.Cf.eg.db")
+total$symbol <- mapIds(org.Cf.eg.db,
+                     keys=total$GENEID,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+# format and fill missing gene names with GENEID 
+total <- merge(total, geneinfo, by="GENEID")
+total$merged_gene_name <- gsub("cfa-mir-","MIR",total$external_gene_name)
+total$merged_gene_name <- gsub("cfa-let-","MIRLET",total$merged_gene_name)
+total$merged_gene_name <- str_to_upper(total$merged_gene_name)
+total$merged_gene_name <- ifelse(total$merged_gene_name == "", total$GENEID, total$merged_gene_name)
+
+# final name to be used
+total$Gene <- ifelse(is.na(total$symbol), total$merged_gene_name, total$symbol)
+
+export(total, "data/final/miRNA.RDS")
+```
+
