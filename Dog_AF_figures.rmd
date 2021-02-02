@@ -33,7 +33,9 @@ pacman::p_load(patchwork,
                reshape2,
                psych,
                PerformanceAnalytics)
+
 theme_set(theme_minimal())
+
 custom.t <-theme_minimal(base_size = 9) +
   theme(
     panel.background = element_rect(fill = "transparent",colour = NA),
@@ -110,14 +112,52 @@ box_fractions <- ggboxplot(fraction.c, x = "condition", y = "fibroblast", shape 
 box_fractions
 ```
 
-## 1.c-PCA after correction for fibroblast fraction
+## 1.c-PCA before correction
+
+```{r}
+all_res <- import("mRNA/data/final/all.raw_expression.RDS")
+
+df <- all_res[all_res$Dataset == "mRNA",expr_cols] #Log transformed expression cols
+
+rv <- rowVars(df)
+
+# select the ntop genes by variance
+select <- order(rv, decreasing=TRUE)[1:1000]
+
+pca <- prcomp(t(df[select,])) # compute PCs
+get_eig(pca) # cumulative explained variance by PC
+fviz_eig(pca) # plot explained variance by PC
+
+#get coordinates by samples PC1&2
+ind <- get_pca_ind(pca) 
+df_ind <- data.frame(ind$coord[,1:2]) 
+
+# Add sample names
+df_ind$sample <- sample_alt_labels
+df_ind$condition <- substr(colnames(all_res)[expr_cols],1,3)
+
+# Plot PC1&2 samples as labels and treatment as colors
+PCA_raw <- ggplot(df_ind, aes(Dim.1, Dim.2, fill=condition, label=sample))+
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) +
+  geom_point(colour = "black", shape=21,size=3) +
+  geom_text_repel(size = 2)+
+  ylim(-16,20)+
+  ggtitle("")
+
+PCA_raw <- PCA_raw + custom.f+ custom.t + xlab("PC1")+ ylab("PC2") + 
+  theme(legend.position = "none",
+        plot.margin = margin(3, 3, 3, 3,unit = "pt"))
+PCA_raw
+```
+## 1.d-PCA after correction for fibroblast fraction
 
 ```{r}
 all_res_cor <- import("mRNA/data/final/all.FB.corrected_expressions.RDS") 
 
 df <- all_res_cor[all_res_cor$Dataset == "mRNA",expr_cols] #Log transformed expression cols
 
-rv <- genefilter::rowVars(df)
+rv <- rowVars(df)
 
 # select the ntop genes by variance
 select <- order(rv, decreasing=TRUE)[1:1000]
@@ -146,6 +186,8 @@ PCA_cor <- ggplot(df_ind, aes(Dim.1, Dim.2, fill=condition, label=sample))+
 PCA_cor <- PCA_cor + custom.f+ custom.t + xlab("PC1")+ ylab("PC2") + 
   theme(legend.position = "none",
         plot.margin = margin(18, 3, 3, 3,unit = "pt"))
+
+PCA_cor
 ```
 
 ## Patchwork fig1
@@ -155,9 +197,10 @@ PCA_cor <- PCA_cor + custom.f+ custom.t + xlab("PC1")+ ylab("PC2") +
 p <- ggdraw() +
   draw_plot(bar_fractions, x = 0, y = .5, width = .66, height = .5) +
   draw_plot(box_fractions, x = .66, y = .5, width = .33, height = .5) +
-  draw_plot(PCA_cor, x = 0.2, y = 0, width = 0.6, height = 0.5) +
-  draw_plot_label(label = c("A", "B", "C"), size = 15,
-                  x = c(0, 0.66, 0.2), y = c(1, 1, 0.5))
+  draw_plot(PCA_raw, x = 0, y = 0, width = 0.5, height = 0.5) +
+  draw_plot(PCA_cor, x = 0.5, y = 0, width = 0.5, height = 0.5) +
+  draw_plot_label(label = c("A", "B", "C", "D"), size = 15,
+                  x = c(0, 0.66, 0, 0.5), y = c(1, 1, 0.5, 0.5))
 
 p
 png("manuscript/Figure1.png", units="in", bg = "transparent", width=9, height=6, res=600)
@@ -745,29 +788,31 @@ for (i in 1:ncol(df)){
         ifelse(row.names(df)[j] %in% strsplit(best[i,"hits"], ",")[[1]], df[j,i]<-1, df[j,i]<-0)
     }
 }
+df <- df[rowSums(df) != 0,]
 df$targets <- row.names(df)
 
 df.m <- melt(df)
 
-t.14q32 <- data.frame(CTLvsAVB.fdr = mRNA[match(unique(targets_names),mRNA$Gene),"CTLvsAVBpadj"], gene = unique(targets_names))
+t.14q32 <- data.frame(CTLvsAVB.fdr = mRNA[match(df$targets,mRNA$Gene),"CTLvsAVBpadj"],
+                      gene = df$targets)
 df.m$CTLvsAVBpadj <- t.14q32$CTLvsAVB.fdr
 
 # Heatmap for genes present in each pathways
 p1 <- ggplot(data = df.m, aes(x = reorder(targets, CTLvsAVBpadj), y = variable, fill = value)) +
-  geom_tile(color = "black") + 
+  geom_tile(color = "white", size = 1) + 
   theme_minimal() + 
   scale_fill_gradient(low = NA, high= "darkred") +
   theme(panel.grid.major = element_blank(), 
         panel.grid.minor = element_blank(),
         panel.background = element_rect(fill = "transparent",colour = NA),
         plot.background = element_rect(fill = "transparent",colour = NA),
-        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, size=6),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
         legend.position = "none") +
   ylab(NULL)+ xlab(NULL)
 
-# Side barplot showing fdr for top 5 pathways
+# Right side barplot showing fdr for top 5 pathways
 p2 <- ggplot(data = best[1:5,], aes(x = -log10(fdr), y = reorder(label,-log10(fdr)))) +
-  geom_bar(stat="identity", color = "black", fill = "darkred") + 
+  geom_bar(stat="identity", color = "white", fill = "darkred") + 
   theme_minimal() + 
   ylab(NULL)+ xlab(NULL) +
   theme(panel.grid.major = element_blank(), 
@@ -783,7 +828,7 @@ p2 <- ggplot(data = best[1:5,], aes(x = -log10(fdr), y = reorder(label,-log10(fd
 
 # Top barplot showing fdr for genes in AVBvsCTL
 p3 <- ggplot(data = t.14q32, aes(x = reorder(gene, CTLvsAVB.fdr), y = -log10(CTLvsAVB.fdr))) +
-  geom_bar(stat="identity", color = "black", fill = "darkred") + 
+  geom_bar(stat="identity", color = "white", fill = "darkred") + 
   theme_minimal() + 
   ylab(NULL)+ xlab(NULL)+
   theme(panel.grid.major = element_blank(), 
@@ -795,8 +840,9 @@ p3 <- ggplot(data = t.14q32, aes(x = reorder(gene, CTLvsAVB.fdr), y = -log10(CTL
         axis.ticks=element_blank(),
         axis.title.x = element_blank(),
         panel.border=element_blank())+
-  annotate("text", x = -4, y = 5, label = "~-Log[10]~~italic(FDR )~ AF+AVBvsCTL", angle = 90, size = 3, parse = TRUE) +
-  coord_cartesian(xlim = c(1, 82), ylim = c(0, 10), clip = "off")
+  annotate("text", x = -1, y = 5, label = "~-Log[10]~~italic(FDR )~ AF+AVBvsCTL",
+           angle = 90, size = 3, parse = TRUE) +
+  coord_cartesian(xlim = c(1, 28), ylim = c(0, 10), clip = "off")
 
 
 
@@ -808,6 +854,7 @@ patch3 <- p3 + plot_spacer() + p1 + p2 +
               panel.grid.minor = element_blank(),
               panel.background = element_rect(fill = "transparent",colour = NA),
               plot.background = element_rect(fill = "transparent",colour = NA))
+patch3
 ```
 
 ## Patchwork fig4 
