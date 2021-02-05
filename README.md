@@ -1,6 +1,6 @@
 # DogAF
 
-This repository contains the analyses done and data used in;
+This repository contains the analyses done and data used in;https://www.biorxiv.org/content/10.1101/2021.02.04.429512v1
 
 <br>
 
