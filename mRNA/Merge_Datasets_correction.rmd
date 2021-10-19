@@ -20,6 +20,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(rio)
 library(biomaRt)
 library(limma)
+library(tidyverse)
 ```
 
 # Merge mRNA, miRNA, Protein Datasets 
@@ -29,7 +30,7 @@ library(limma)
 ```{r}
 mRNA <- import("data/final/gene_lvl_mRNA.RDS")
 miRNA <- import("../miRNA/data/final/miRNA.RDS")
-proteins <- import("../Proteomic/data/protein.xlsx")
+proteins <- import("../Proteomic/data/DE_protein.xlsx")
 colnames(proteins)[1:18] <- gsub("-","",colnames(proteins)[1:18])
 ```
 
@@ -145,6 +146,22 @@ all_res_sup <- readRDS("data/final/all.raw_expression.RDS")
 colnames(all_res_sup) <- gsub("ATP", "AF", colnames(all_res_sup))
 colnames(all_res_sup) <- gsub("AVB", "AF+AVB", colnames(all_res_sup))
 all_res_sup[,c(2,4,6)] <- all_res_sup[,c(2,4,6)]*-1
-colnames(all_res_sup)[c(2,4,6)] <- c("AF+AVBvsCTLL2FC", "AFvsCTLL2FC", "AFvsAF+AVBL2FC")
-rio::export(all_res_sup, "data/final/all_res.sup.table.xlsx")
+colnames(all_res_sup)[c(2,4,6)] <- c("AF+AVBvsCTL.L2FC", "AFvsCTL.L2FC", "AFvsAF+AVB.L2FC")
+# rio::export(all_res_sup, "data/final/all_res.sup.table.xlsx")
+
+# merge proteomics and RNAseq tables by gene names
+all_res_sup[,2:8] <- signif(all_res_sup[,2:8], digits = 2)
+RNA <- all_res_sup %>% filter(Dataset %in% c("miRNA","mRNA"))
+colnames(RNA)[2:7] <- paste0("RNAseq_",colnames(RNA)[2:7])
+
+proteins <- import("../Proteomic/data/DE_protein.xlsx")
+prot_DE <- all_res_sup%>% filter(Dataset %in% c("proteins"))
+prot_DE$Proteins <- proteins$`Majority protein IDs`[match(prot_DE$Gene, proteins$best_gene_name)]
+colnames(prot_DE)[2:7] <- paste0("Proteomics_",colnames(prot_DE)[2:7])
+colnames(prot_DE)[8] <- "Proteomics_F_padj"
+
+m <- merge(RNA[,-c(9:10,14,17:35)], prot_DE[,c(1:8,36)], all = T, by = "Gene")
+export(m, "data/final/all_res.sup.table.xlsx")
+
+
 ```

@@ -1,0 +1,254 @@
+---
+title: "litterature_hsa_AF"
+author: "Francis Leblanc"
+date: "18/09/2020"
+output:   
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: true
+    code_folding: hide 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+pacman::p_load(patchwork,
+               ComplexUpset,
+               hrbrthemes,
+               cowplot,
+               tidyverse,
+               rio,
+               ggplot2,
+               limma,
+               ggpubr,
+               tximport,
+               DESeq2)
+```
+
+
+# DE analysis of RNAseq J. Hsu et al. 2018
+
+```{r}
+pheno.EU <- as.data.frame(data.table::fread("data/litterature/GSM1712025_phenotypes_euro.txt", header = T))
+pheno.EU <- pheno.EU[c(1,nrow(pheno.EU)),]
+pheno.AA <- as.data.frame(data.table::fread("data/litterature/GSM1712025_phenotypes_aa.txt", header = T))
+pheno.AA <- pheno.AA[c(1,nrow(pheno.AA)),]
+pheno <- cbind(pheno.EU,pheno.AA[,2:ncol(pheno.AA)])
+
+
+row.names(pheno) <- pheno$V1
+pheno <- as.data.frame(t(pheno[,2:ncol(pheno)]))
+pheno[,1:2] <- lapply(pheno, factor)
+pheno$AtrialRhythm <- factor(pheno$AtrialRhythm)
+levels(pheno$AtrialRhythm) <- c("CTL","AF", "AF_SR")
+levels(pheno$sexFemale) <- c("F","M")
+
+ex <- as.data.frame(data.table::fread("data/litterature/GSM1712025_raw_counts.txt", header = T))
+row.names(ex) <- ex$V1
+ex <- as.data.frame(ex[,2:ncol(ex)])
+ex <- ex[,colnames(ex) %in% row.names(pheno)]
+
+pheno <- pheno[row.names(pheno) %in% colnames(ex), ]
+pheno <- pheno[match(colnames(ex), row.names(pheno)), ]
+
+##### DEseq
+
+des <- ~ sexFemale + AtrialRhythm
+dds <- DESeqDataSetFromMatrix(countData = ex, colData = pheno, design = des)
+dds <- estimateSizeFactors(dds)
+idx <- rowSums(assay(dds) == 0) < nrow(pheno)*0.66
+dds <- dds[idx,]
+dds <- DESeq(dds)
+hsa.vst <- vst(dds, blind=F)
+dds_LRT <- DESeq(dds, test="LRT", reduced= ~ sexFemale)
+res_LRT <- results(dds_LRT)
+
+
+# 3 contrasts
+hsa_AFvsCTL <- as.data.frame(lfcShrink(dds, contrast=c("AtrialRhythm","AF", "CTL"), type = "normal"))
+colnames(hsa_AFvsCTL) <- paste0('hsa_AFvsCTL', colnames(hsa_AFvsCTL))
+
+# 3 contrasts
+hsa_AF_SRvsCTL <- as.data.frame(lfcShrink(dds, contrast=c("AtrialRhythm", "AF_SR","CTL"), type = "normal"))
+colnames(hsa_AF_SRvsCTL) <- paste0('hsa_AF_SRvsCTL', colnames(hsa_AF_SRvsCTL))
+
+# 3 contrasts
+hsa_AFvsAF_SR <- as.data.frame(lfcShrink(dds, contrast=c("AtrialRhythm","AF","AF_SR"), type = "normal"))
+colnames(hsa_AFvsAF_SR) <- paste0('hsa_AFvsAF_SR', colnames(hsa_AFvsAF_SR))
+
+
+hsa_total <- cbind(hsa_AFvsCTL[,c(2,6)],hsa_AF_SRvsCTL[,c(2,6)],hsa_AFvsAF_SR[,c(2,6)], res_LRT$padj)
+
+
+# annotation
+ensembl.hsa <- biomaRt::useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+BM.hsa <- biomaRt::getBM(
+  attributes = c("ensembl_gene_id", "external_gene_name","description"),
+  filters = "ensembl_gene_id",
+  values = row.names(hsa_total),
+  mart = ensembl.hsa)
+
+hsa_total$genes <- row.names(hsa_total)
+hsa_total.a <- merge(hsa_total,BM.hsa, by.x="genes", by.y="ensembl_gene_id", all.x=T)
+
+hsa.total <- as.data.frame(assay(hsa.vst))
+hsa_total.a <- cbind(hsa_total.a, hsa.total)
+
+
+saveRDS(hsa_total.a,"data/litterature/J.Hsu.2018_DEG_cov.sex.RDS")
+saveRDS(dds,"data/litterature/dds.J.Hsu.2018_DEG_cov.sex.RDS")
+```
+
+## Overlap with DE mRNAs list from Dog results
+
+```{r}
+hsa_total.a <- readRDS("data/litterature/J.Hsu.2018_DEG_cov.sex.RDS")
+
+# hsa DEG
+hsa_DEG <- hsa_total.a %>% 
+  filter_at(vars(hsa_AFvsCTLpadj, hsa_AF_SRvsCTLpadj,hsa_AFvsAF_SRpadj), any_vars(.<0.01))
+hsa_DEG <- hsa_DEG %>% filter(!is.na(external_gene_name))
+
+# canfam DEG
+all_res_cor <- import("data/final/all.FB.corrected_expressions.RDS")
+
+mRNA_DE <- all_res_cor %>% 
+  filter(Dataset == "mRNA") %>% 
+  filter_at(vars(CTLvsAVBpadj, CTLvsATPpadj,AVBvsATPpadj), any_vars(.<0.01))
+
+mRNA_DE <- mRNA_DE %>% filter(!is.na(hsapiens_homolog_associated_gene_name))
+mRNA_DE <- mRNA_DE %>% filter(hsapiens_homolog_associated_gene_name != "")
+mRNA_DE <- mRNA_DE[!duplicated(mRNA_DE$hsapiens_homolog_associated_gene_name),]
+
+# Cols to keep
+padj_cols <- c("CTLvsAVBpadj","CTLvsATPpadj","AVBvsATPpadj")
+padj_cols.hsa <- c("hsa_AFvsCTLpadj","hsa_AF_SRvsCTLpadj","hsa_AFvsAF_SRpadj")
+
+# overlaping genes only
+m <- merge(mRNA_DE[,c(padj_cols,"hsapiens_homolog_associated_gene_name")],
+           hsa_DEG[,c(padj_cols.hsa,"external_gene_name")],
+           by.x="hsapiens_homolog_associated_gene_name",
+           by.y="external_gene_name",
+           all=F)
+m[is.na(m)] <- 1
+row.names(m) <- m$hsapiens_homolog_associated_gene_name
+m <- m[,-1]
+m <- m %>% add_column(hsapiens_homolog_associated_gene_name = row.names(.), .before = 1)
+
+m <- m %>% dplyr::rename(
+  AFvsCTLpadj = CTLvsATPpadj,
+  'AF+AVBvsCTLpadj' = CTLvsAVBpadj,
+  'AFvsAF+AVBpadj' = AVBvsATPpadj
+)
+```
+
+
+## Supplementary table of overlap canfam hsa
+
+```{r}
+colnames(m)[2:4] <- paste0("CanFam_",colnames(m)[2:4])
+colnames(m) <- gsub("AF_SR","AF.SR",colnames(m))
+# rio::export(m, "data/final/CanFam_hsa.DEG_overlap.xlsx")
+```
+
+# Figure 5 (upset plot)
+
+```{r}
+m <- m[,-1]
+m <- as.data.frame(ifelse(m < 0.01, TRUE, FALSE))
+
+# m <- m[,c("CTLvsATPpadj","CTLvsAVBpadj","AVBvsATPpadj","hsa_AFvsCTLpadj","hsa_AF_SRvsCTLpadj","hsa_AFvsAF_SRpadj")]
+m <- m[,c("AFvsCTLpadj","AF+AVBvsCTLpadj","AFvsAF+AVBpadj","hsa_AFvsCTLpadj","hsa_AF.SRvsCTLpadj","hsa_AFvsAF.SRpadj")]
+
+
+
+m2 <- dplyr::rename(m,
+       hsa_AF.SRvsCTLpadj = hsa_AFvsCTLpadj,
+       hsa_AFvsCTLpadj = hsa_AF.SRvsCTLpadj,
+       hsa_AF.SRvsAFpadj = hsa_AFvsAF.SRpadj)
+
+
+p <- ComplexUpset::upset(m2, colnames(m2), width_ratio=0.2, sort_sets=F, stripes=c(NA , NA ),
+                 set_sizes = upset_set_size(geom=geom_bar(fill="darkred")))
+p
+ggsave("../manuscript/Upset_HSAvsDOG_AF_DEG2.png", plot=p, height = 6, width = 10, dpi=600)
+```
+
+
+# Sheep_AF (https://academic.oup.com/cardiovascres/advance-article/doi/10.1093/cvr/cvaa307/5942974)
+
+```{r}
+# Remove NA and duplicated genes
+Sheep_atria <- import("data/litterature/Sheep_AF_atria.xlsx")
+Sheep_atria <- Sheep_atria %>% filter(hsapiens_homolog_associated_gene_name !="NA")
+Sheep_CM <- import("data/litterature/Sheep_AF_CM.xlsx")
+Sheep_CM <- Sheep_CM %>% filter(hsapiens_homolog_associated_gene_name !="NA")
+
+sheep <- merge(Sheep_atria, Sheep_CM, by="hsapiens_homolog_associated_gene_name", suffixes = c(".A",".CM"))
+sheep <- sheep %>% filter(!duplicated(hsapiens_homolog_associated_gene_name))
+```
+
+## Hits from their DE Chromatin pathways  
+
+```{r}
+# The following list was created by combining the results from their tableS3:geneSymbol column of ;
+# pathways :chromatin DNA binding, chromatin binding, covalent chromatin modification
+ 
+chromatin_genes_sheep <- c("CREBBP", "CTCF", "BRD4", "NKX2-5", "TSHZ1", "KLHDC3", "SRF", "HDAC5", "SMC1A", "MBD5", "MEF2A", "TRIM24", "DEK", "RAD21", "PHF13", "SMARCA2", "ZEB1", "KAT2B", "FOXO4", "CALCOCO1", "KDM3B", "NCOA1", "STAT5B", "PPARGC1A", "H3F3B", "SMARCD2", "H2AFZ", "RARA", "MTA2", "RELA", "APEX1", "HDAC1", "EHMT1", "SIN3A", "MBTD1", "NSD1", "ARID1A", "SIRT1", "KDM2A", "EPC2", "USP21", "NCOA3", "SMARCC2", "NIPBL", "EPC1", "CECR2", "DOT1L", "KMT5B", "MTF2", "BCL6", "DPF3", "NRIP1", "SHPRH", "SIN3A", "KAT6A", "AHCTF1", "NFATC1", "JMJD1C", "RNF40", "MYC", "JUN", "H1FX", "ICE1", "SAP130", "NFE2L2", "POLA1", "KAT5", "TOX4", "KDM3A")
+
+chromatin_genes_sheep <- unique(chromatin_genes_sheep)
+
+# filter genes DE in Dog AF and keep L2FC columns
+DE_chrom_g <- mRNA_DE %>%
+  filter(hsapiens_homolog_associated_gene_name %in% chromatin_genes_sheep) %>% 
+  dplyr::select(Gene, CTLvsAVBL2FC, CTLvsATPL2FC)
+
+# order by L2FC of AVB
+DE_chrom_g <- DE_chrom_g[!is.na(DE_chrom_g$Gene),]
+DE_chrom_g <- DE_chrom_g[DE_chrom_g$Gene != "",]
+
+DE_chrom_g$Gene <- factor(DE_chrom_g$Gene,
+                 levels = DE_chrom_g$Gene[order(DE_chrom_g$CTLvsAVBL2FC)])
+
+# Rename with CTL as baseline
+colnames(DE_chrom_g)[2:3] <- c("AVBvsCTLL2FC", "ATPvsCTLL2FC")
+DE_chrom_g[,2:3]<-DE_chrom_g[,2:3]*-1
+
+DE_chrom_g <- cbind(DE_chrom_g, sheep[match(DE_chrom_g$Gene,sheep$hsapiens_homolog_associated_gene_name),
+                         c("logFC_L_ChronicvsControl.CM", "logFC_L_TransitionvsControl.CM")]) 
+
+
+
+# Rename with CTL as baseline
+m <- melt(DE_chrom_g)
+
+# plot comparing L2FC
+p<-ggplot(m)+
+  geom_point(aes(Gene, value, fill=variable),alpha = 0.8, size=3, shape=21) +
+  theme_minimal() +
+  geom_hline(aes(yintercept=0), colour ="black") +
+  ylab("Log2 Fold Change vs CTL") + xlab("Genes")+
+  ggtitle("") +
+  scale_fill_manual(name="CTL contrasted group",
+                      values= c("#b80909","darkblue", "#bce3ba", "#449c40"),
+                      breaks=c("AVBvsCTLL2FC", "ATPvsCTLL2FC", 
+                               "logFC_L_ChronicvsControl.CM", "logFC_L_TransitionvsControl.CM"),
+                      labels=c("AF+AVB", "AF", "Sheep_Chron", "Sheep_Trans"))+
+  theme(
+    legend.background  = element_rect(fill = "transparent",colour = NA),
+    legend.key = element_rect(fill = "transparent",colour = NA),
+    axis.text.x = element_text(angle = 45, hjust = 1))
+p
+ggsave("../manuscript/FigureS1.png",
+       p,width = 8,height = 5, dpi = 600, bg = "transparent")
+
+```

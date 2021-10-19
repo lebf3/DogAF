@@ -70,7 +70,7 @@ prot$gene_protein <- paste0(prot$`Gene name`,"_",prot$`Majority protein IDs`)
 
 prot$best.gene_protein <- paste0(prot$best_gene_name,"_",prot$`Majority protein IDs`)
 
-export(prot,"data/proteome_uniprot.xlsx")
+# export(prot,"data/proteome_uniprot.xlsx")
 ```
 
 
@@ -146,11 +146,11 @@ data_imp_q0.1 <- impute(data_norm, fun = "MinProb", q = 0.10)
 
 ```{r}
 ################## MinProb_q0.1 ###############
-df_wide_MinProb_q0.1 <- get_df_wide(dep.min_q0.1)
+df_wide_MinProb_q0.1 <- get_df_wide(data_imp_q0.1)
 
 
 # import cells fractions
-fraction.c <- import("../../mRNA/data/final/CIBERSORTx_Job2_Results.xlsx")
+fraction.c <- import("../mRNA/data/final/CIBERSORTx.xlsx")
 fraction.c$condition <- factor(c(rep("AVB",6),rep("ATP",6),rep("CTL",6)), levels = c("CTL", "ATP", "AVB"))
 
 colnames(df_wide_MinProb_q0.1)[2:19] <- experimental_design$label
@@ -196,11 +196,11 @@ df_wide_MinProb_q0.1$ATPvsAVB_fdr <-  results.ATPvsAVB[df_wide_MinProb_q0.1$name
 df_wide_MinProb_q0.1$AVBvsCTL_L2FC <- results.AVBvsCTL[df_wide_MinProb_q0.1$name,"logFC"]
 df_wide_MinProb_q0.1$AVBvsCTL_fdr <- results.AVBvsCTL[df_wide_MinProb_q0.1$name,"adj.P.Val"]
 
-df_wide_MinProb_q0.1_subset <- df_wide_MinProb_q0.1[,c(2:21,23:24,44:51)]
+df_wide_MinProb_q0.1_subset <- df_wide_MinProb_q0.1[,c(2:21,23:32)]
 colnames(df_wide_MinProb_q0.1_subset)[19] <- "gene_protein"
 df_wide_MinProb_q0.1_subset <- merge(df_wide_MinProb_q0.1_subset, data_NaN[,19:43], by="gene_protein")
 df_wide_MinProb_q0.1_subset <- df_wide_MinProb_q0.1_subset[,c(2:54,1)]
 
-# export(df_wide_MinProb_q0.1_subset, "data/protein_MinProb_q0.1_filtered.FB.cov.xlsx")
+export(df_wide_MinProb_q0.1_subset, "data/DE_protein.xlsx")
 ```
 

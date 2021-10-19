@@ -48,6 +48,7 @@ row.names(counts) <- counts.files[[1]]$V1
 ```{r}
 sampleTable <- data.frame(samples = colnames(counts),
                           condition = c(rep(c("ATP","AVB","CTL"), each = 6)))
+# sampleTable$sex <- factor(c("F","F","M","M","F","M","M","F","F","M","M","M","M","F","M","F","M","M"))
 
 deconv.res <- import("../mRNA/data/final/CIBERSORTx.xlsx")
 sampleTable <- sampleTable[match(colnames(counts),sampleTable$sample),]
@@ -57,6 +58,7 @@ sampleTable <- cbind(sampleTable, deconv.res[,c(2:9)])
 row.names(sampleTable) <- sampleTable$sample
 
 
+# des <- ~ fibroblast + sex + condition
 des <- ~ fibroblast + condition
 dds <- DESeqDataSetFromMatrix(counts, colData = sampleTable, design = des)
 
@@ -71,13 +73,13 @@ rld <- rlog(dds, blind=F)
 # 3 contrasts 
 
 ```{r}
-lfg_CTLvsAVB <- as.data.frame(lfcShrink(dds, contrast=c("condition","CTL","AVB")))
+lfg_CTLvsAVB <- as.data.frame(lfcShrink(dds, contrast=c("condition","CTL","AVB"), type = "normal"))
 colnames(lfg_CTLvsAVB) <- paste0('lfg_CTLvsAVB', colnames(lfg_CTLvsAVB))
 
-lfg_CTLvsATP <- as.data.frame(lfcShrink(dds, contrast=c("condition","CTL","ATP")))
+lfg_CTLvsATP <- as.data.frame(lfcShrink(dds, contrast=c("condition","CTL","ATP"), type = "normal"))
 colnames(lfg_CTLvsATP) <- paste0('lfg_CTLvsATP', colnames(lfg_CTLvsATP))
 
-lfg_AVBvsATP <- as.data.frame(lfcShrink(dds, contrast=c("condition","AVB","ATP")))
+lfg_AVBvsATP <- as.data.frame(lfcShrink(dds, contrast=c("condition","AVB","ATP"), type = "normal"))
 colnames(lfg_AVBvsATP) <- paste0('lfg_AVBvsATP', colnames(lfg_AVBvsATP))
 
 # merge results
@@ -96,7 +98,7 @@ total <- add_column(total, GENEID, .before = 1)
 
 ```{r}
 # from STAR alignment
-geneinfo <- fread("data/tmp/geneInfo.tab")
+geneinfo <- data.table::fread("data/final/geneInfo.tab")
 geneinfo <- geneinfo[match(total$GENEID, geneinfo$GENEID),c("GENEID", "external_gene_name")]
 
 # Find names of genes missing

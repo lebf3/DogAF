@@ -119,7 +119,7 @@ all_res <- import("mRNA/data/final/all.raw_expression.RDS")
 
 df <- all_res[all_res$Dataset == "mRNA",expr_cols] #Log transformed expression cols
 
-rv <- rowVars(df)
+rv <- genefilter::rowVars(df)
 
 # select the ntop genes by variance
 select <- order(rv, decreasing=TRUE)[1:1000]
@@ -157,7 +157,7 @@ all_res_cor <- import("mRNA/data/final/all.FB.corrected_expressions.RDS")
 
 df <- all_res_cor[all_res_cor$Dataset == "mRNA",expr_cols] #Log transformed expression cols
 
-rv <- rowVars(df)
+rv <- genefilter::rowVars(df)
 
 # select the ntop genes by variance
 select <- order(rv, decreasing=TRUE)[1:1000]
@@ -322,13 +322,14 @@ v.theme <- theme(
   legend.background  = element_rect(fill = "transparent",colour = NA),
   legend.key = element_rect(fill = "transparent",colour = NA))
 
+lbl <- ifelse(mRNA$CTLvsAVBpadj < 10^-10, mRNA$Gene, NA)
+lbl[which(mRNA$GENEID == "ENSCAFG00000049959")] <- "MEG3"
+
 max <- -log10(10e-28)
 v.AVB.CTL <- EnhancedVolcano(mRNA,
-    lab = mRNA$Gene,
-    transcriptPointSize = 1.5,
-    transcriptLabSize = 2.5,
-    pLabellingCutoff = 1e-10,
-    legendVisible = F,
+    lab = lbl,
+    pointSize = 1.5,
+    labSize = 2.5,
     x = 'AVBvsCTLL2FC',
     y = 'CTLvsAVBpadj',
     pCutoff = 0.01,
@@ -344,10 +345,10 @@ v.AVB.CTL <- EnhancedVolcano(mRNA,
     title = NULL,
     caption = NULL,
     subtitle = NULL,
-    legendPosition = NULL,
+    legendPosition = "none",
     ylab = expression(paste(-Log[10],italic("FDR"))),
     # xlab = NULL,
-    drawConnectors = T,
+    # drawConnectors = T,
     axisLabSize = 9, 
     ylim = c(0, max),
     xlim = c(-5, 4))+
@@ -358,12 +359,13 @@ v.AVB.CTL <- v.AVB.CTL + v.theme
 
 #######################
 
+lbl <- ifelse(mRNA$CTLvsATPpadj < 10^-10, mRNA$Gene, NA)
+lbl[which(mRNA$GENEID == "ENSCAFG00000049959")] <- "ENSCAFG00000049959(MEG3)"
+
 v.ATP.CTL <-EnhancedVolcano(mRNA,
-    lab = mRNA$Gene,
-    transcriptPointSize = 1.5,
-    transcriptLabSize = 2.5,
-    pLabellingCutoff = 1e-10,
-    legendVisible = F,
+    lab = lbl,
+    pointSize = 1.5,
+    labSize = 2.5,
     x = 'ATPvsCTLL2FC',
     y = 'CTLvsATPpadj',
     pCutoff = 0.01,
@@ -379,10 +381,9 @@ v.ATP.CTL <-EnhancedVolcano(mRNA,
     title = NULL,
     caption = NULL,
     subtitle = NULL,
-    legendPosition = NULL,
+    legendPosition = "none",
     # xlab = NULL,
     ylab = expression(paste(-Log[10],italic("FDR"))),
-    drawConnectors = T,
     axisLabSize = 9, 
     ylim = c(0, max),
     xlim = c(-5, 4))+
@@ -393,15 +394,13 @@ v.ATP.CTL <-EnhancedVolcano(mRNA,
 v.ATP.CTL <- v.ATP.CTL + v.theme
 
 #######################
-
-mRNA$Gene[which(mRNA$GENEID == "ENSCAFG00000049959")] <- ""
+lbl <- ifelse(mRNA$AVBvsATPpadj < 10^-11, mRNA$Gene, NA)
+lbl[which(mRNA$GENEID == "ENSCAFG00000049959")] <- "MEG3"
 
 v.ATP.AVB <- EnhancedVolcano(mRNA,
-    lab = mRNA$Gene,
-    transcriptPointSize = 1.5,
-    transcriptLabSize = 2.5,
-    pLabellingCutoff = 1e-10,
-    legendVisible = F,
+    lab = lbl,
+    pointSize = 1.5,
+    labSize = 2.5,
     x = 'AVBvsATPL2FC',
     y = 'AVBvsATPpadj',
     pCutoff = 0.01,
@@ -417,9 +416,9 @@ v.ATP.AVB <- EnhancedVolcano(mRNA,
     title = NULL,
     caption = NULL,
     subtitle = NULL,
-    legendPosition = NULL,
-    drawConnectors = T,
+    legendPosition = "none",
     axisLabSize = 9,
+    # drawConnectors = T,
     ylab = expression(paste(-Log[10],italic("FDR"))),
     ylim = c(0, max),
     xlim = c(-5, 4))+
@@ -481,8 +480,8 @@ l<-list()
 
 # Get up and down genes in all 3 contrasts
 for (i in 1:3) {
-  l[[paste0("Up_",substr(padj_cols[i],1,8))]] <- ifelse(mRNA[,padj_cols[i]] < 0.01 & mRNA[,LFC_cols[i]] > 0, TRUE, FALSE)
-  l[[paste0("Down_",substr(padj_cols[i],1,8))]] <- ifelse(mRNA[,padj_cols[i]] < 0.01 & mRNA[,LFC_cols[i]] < 0, TRUE, FALSE)
+  l[[paste0("Up_",substr(colnames(mRNA)[padj_cols[i]],1,8))]] <- ifelse(mRNA[,padj_cols[i]] < 0.01 & mRNA[,LFC_cols[i]] > 0, TRUE, FALSE)
+  l[[paste0("Down_",substr(colnames(mRNA)[padj_cols[i]],1,8))]] <- ifelse(mRNA[,padj_cols[i]] < 0.01 & mRNA[,LFC_cols[i]] < 0, TRUE, FALSE)
 }
 
 
@@ -491,11 +490,14 @@ colnames(df) <- names(l)
 df[is.na(df)] <- FALSE
 df <- df[apply(df, 1, function(x) any(x)),] # remove all fasle rows
 
-colnames(df) <- c("up.AFvsCTL", "down.AFvsCTL","up.AF+AVBvsCTL", "down.AF+AVBvsCTL","up.AFvsAF+AVB", "down.AFvsAF+AVB")
+colnames(df) <- gsub("CTLvsATP","AFvsCTL",colnames(df))
+colnames(df) <- gsub("CTLvsAVB","AF+AVBvsCTL",colnames(df))
+colnames(df) <- gsub("AVBvsATP","AFvsAF+AVB",colnames(df))
 
 # compare significant genes sets
 upset_p <- upset(df, colnames(df), width_ratio=0.2,sort_sets='ascending', stripes=c(NA , NA ),
-                 set_sizes = upset_set_size(fill="darkred"),
+                 set_sizes = upset_set_size(
+                   geom=geom_bar(fill="darkred")),
                  themes=upset_modify_themes(
                    list(default=theme(
                      panel.background = element_rect(fill = "transparent",colour = NA),
@@ -867,7 +869,7 @@ patch2 <- manhplot +plot_spacer()+ upset_p+ plot_layout(ncol=3, widths=c(10,1,8)
 
 patch4 <- plot_spacer() + patch3 + plot_layout(ncol=2, widths=c(1,1000)) 
 
-png("manuscript/Figure_4.png", units="in", bg = "transparent", width=12, height=9, res=600)
+png("manuscript/Figure4.png", units="in", bg = "transparent", width=12, height=9, res=600)
 
 patch1 / patch2 / patch4 +
   plot_layout(heights = c(1.5, 1.5, 1.5)) &
@@ -882,4 +884,4 @@ dev.off()
 
 # Figure 5
 
-See mRNA/litterature_hsa_AF.rmd
+See mRNA/lit_AF.rmd

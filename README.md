@@ -1,10 +1,15 @@
 # DogAF
 
-This repository contains the analyses done and data used in;https://www.biorxiv.org/content/10.1101/2021.02.04.429512v1
+This repository contains the analyses done and data used in https://www.ahajournals.org/doi/10.1161/CIRCEP.121.009887
 
 <br>
 
-# Transcriptomic profilling of atrial fibrillation canine models at disease onset
+# Transcriptomic Profiling of Canine Atrial Fibrillation Models After One Week of Sustained Arrhythmia
+
+<br>
+
+![Alt text](./manuscript/Graphical_abstract3_inkscape.svg)
+<img src="./manuscript/Graphical_abstract3_inkscape.svg">
 
 <br>
 
