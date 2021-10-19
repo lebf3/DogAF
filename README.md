@@ -9,7 +9,6 @@ This repository contains the analyses done and data used in https://www.ahajourn
 <br>
 
 ![Alt text](./manuscript/Graphical_abstract3_inkscape.svg)
-<img src="./manuscript/Graphical_abstract3_inkscape.svg">
 
 <br>
 
